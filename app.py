@@ -1,0 +1,760 @@
+import io
+import os
+import sys
+import subprocess
+import asyncio
+import logging
+from datetime import datetime
+
+# Auto-install packages
+try:
+    import discord
+    from discord import app_commands
+    from discord.ext import commands, tasks
+    import mysql.connector
+    import aiohttp
+except ImportError:
+    try:
+        subprocess.check_call([
+            sys.executable, "-m", "pip", "install",
+            "discord.py", "mysql-connector-python", "aiohttp"
+        ])
+    except Exception as e:
+        print(f"[setup] Auto-install failed: {e}")
+        sys.exit(1)
+    os.execl(sys.executable, sys.executable, *sys.argv)
+
+import discord
+from discord import app_commands
+from discord.ext import commands, tasks
+import mysql.connector
+import logging
+
+# Patch discord logging to prevent format crash
+try:
+    for handler in logging.getLogger("discord.gateway").handlers:
+        handler.setFormatter(logging.Formatter("%(asctime)s:%(levelname)s:%(name)s: %(message)s"))
+except Exception as e:
+    print(f"[logging] Patch failed: {e}")
+
+# Silence session resume and other info logs
+try:
+    logging.getLogger("discord").setLevel(logging.WARNING)
+except Exception as e:
+    print(f"[logging] Set level failed: {e}")
+
+intents = discord.Intents.default()
+intents.guilds = True
+intents.messages = True
+intents.message_content = True
+
+bot = commands.Bot(command_prefix="!", intents=intents)
+
+db_config = {
+    "host": "hypnotic.dathost.net",
+    "port": 3306,
+    "user": "Z1b1qwrCrMjeubsY",
+    "password": "PU7N__qqXQI",
+    "database": "6756f5ab0ac2acc8deb9bb18"
+}
+
+warned_versions = {}  # (guild_id, channel_id): version_str or "fail" or "ok"
+blocked_messages = {}
+last_unlinked_ping = {}
+MCXDEV_ID = 806806527192334356
+MCX_LOGO_URL = "https://cdn.modrinth.com/data/l3UqzYGx/9aca66c04eef38ce55e85c642962e1fa0b29ba1c.png"
+
+
+def get_db():
+    try:
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS MCxDISCORD (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                guild_id VARCHAR(32),
+                channel_id VARCHAR(32),
+                mc_ip VARCHAR(64),
+                auth_token TEXT
+            )
+        """)
+        conn.commit()
+        return conn
+    except Exception as e:
+        print(f"[db] Connection failed: {e}")
+        return None
+
+
+async def update_presence():
+    try:
+        conn = get_db()
+        count = 0
+        if conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM MCxDISCORD")
+            result = cursor.fetchone()
+            count = result[0] if result else 0
+            conn.close()
+        await bot.change_presence(activity=discord.Game(name=f"Linking {count} servers!"))
+    except Exception as e:
+        print(f"[presence] Failed to update presence: {e}")
+
+
+@bot.event
+async def on_ready():
+    try:
+        await bot.tree.sync()
+        await update_presence()
+        version_checker.start()
+        print(f"[ready] Logged in as {bot.user}")
+    except Exception as e:
+        print(f"[ready] Error during on_ready: {e}")
+
+
+def is_admin():
+    async def predicate(interaction: discord.Interaction):
+        try:
+            return interaction.user.guild_permissions.administrator
+        except Exception:
+            return False
+    return app_commands.check(predicate)
+
+
+async def get_latest_versions():
+    try:
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.get("https://api.modrinth.com/v2/project/mcxdiscord/version", timeout=10) as resp:
+                    data = await resp.json()
+                    versions = {}
+                    for version in data:
+                        ver = version["version_number"]
+                        platform = "spigot" if "spigot" in ver.lower() else "paper"
+                        if platform not in versions:
+                            versions[platform] = ver
+                    return versions
+            except Exception as e:
+                print(f"[version check] Failed to fetch Modrinth versions: {e}")
+                return {}
+    except Exception as e:
+        print(f"[version check] Session error: {e}")
+        return {}
+
+
+@tasks.loop(seconds=10)
+async def version_checker():
+    try:
+        conn = get_db()
+        if not conn:
+            return
+
+        cursor = conn.cursor()
+        cursor.execute("SELECT guild_id, channel_id, mc_ip, auth_token FROM MCxDISCORD")
+        rows = cursor.fetchall()
+        conn.close()
+
+        latest_versions = await get_latest_versions()
+
+        async with aiohttp.ClientSession() as session:
+            for guild_id, channel_id, mc_ip, token in rows:
+                try:
+                    async with session.post(f"http://{mc_ip}/link", data={"token": token}, timeout=5) as resp:
+                        if resp.status != 200:
+                            continue
+                except Exception:
+                    continue
+
+                version = None
+                try:
+                    async with session.get(f"http://{mc_ip}/version", timeout=5) as vresp:
+                        if vresp.status == 200:
+                            version = (await vresp.text()).strip()
+                except Exception:
+                    pass
+
+                key = (guild_id, channel_id)
+                channel = bot.get_channel(int(channel_id))
+                if not channel:
+                    continue
+
+                guild = bot.get_guild(int(guild_id))
+                owner = guild.owner if guild else None
+
+                if not version:
+                    if warned_versions.get(key) != "fail":
+                        warned_versions[key] = "fail"
+                        embed = discord.Embed(
+                            title="❗ Outdated Plugin!",
+                            description="This server is missing the version endpoint.\nDownload the latest: https://modrinth.com/plugin/mcxdiscord",
+                            color=0xff0000
+                        )
+                        try:
+                            await channel.send(embed=embed)
+                        except Exception:
+                            pass
+                        if owner:
+                            try:
+                                await owner.send(embed=embed)
+                            except Exception:
+                                pass
+                    continue
+
+                platform = "spigot" if "spigot" in version.lower() else "paper"
+                latest = latest_versions.get(platform)
+
+                if latest and version == latest:
+                    if warned_versions.get(key) != "ok":
+                        warned_versions[key] = "ok"
+                        embed = discord.Embed(
+                            title="✅ Plugin Updated!",
+                            description=f"Thanks for updating to {version} — you're now running the latest version.",
+                            color=0x00ff00
+                        )
+                        try:
+                            await channel.send(embed=embed)
+                        except Exception:
+                            pass
+                        if owner:
+                            try:
+                                await owner.send(embed=embed)
+                            except Exception:
+                                pass
+
+                elif latest and version != latest:
+                    if warned_versions.get(key) != version:
+                        warned_versions[key] = version
+                        embed = discord.Embed(
+                            title="🔁 Outdated Plugin Detected!",
+                            description=f"You're running {version} — latest for {platform} is {latest}\nDownload: https://modrinth.com/plugin/mcxdiscord",
+                            color=0xff0000
+                        )
+                        try:
+                            await channel.send(embed=embed)
+                        except Exception:
+                            pass
+                        if owner:
+                            try:
+                                await owner.send(embed=embed)
+                            except Exception:
+                                pass
+    except Exception as e:
+        print(f"[version_checker] Error in loop: {e}")
+
+
+@bot.tree.command(name="link", description="Link a channel to a Minecraft server")
+@is_admin()
+@app_commands.describe(
+    channel="Channel to link",
+    mc_ip="Minecraft server IP",
+    port="Plugin port",
+    auth_token="Authentication token"
+)
+async def link(interaction: discord.Interaction, channel: discord.TextChannel, mc_ip: str, port: int, auth_token: str):
+    try:
+        await interaction.response.send_message(embed=discord.Embed(
+            title="🔗 Linking...", description="Working...", color=0xffff00), ephemeral=True)
+
+        full_address = f"{mc_ip}:{port}"
+        embed = discord.Embed(title="🔗 Link Result", color=0xffff00)
+        embed.add_field(name="Channel", value=channel.mention, inline=False)
+        embed.add_field(name="MC IP", value=mc_ip, inline=True)
+        embed.add_field(name="Port", value=str(port), inline=True)
+
+        plugin_ok = False
+        debug_log = []
+
+        async with aiohttp.ClientSession() as session:
+            for attempt in range(1, 6):
+                try:
+                    async with session.post(
+                        f"http://{mc_ip}:{port}/link",
+                        data={"token": auth_token},
+                        timeout=5
+                    ) as resp:
+                        debug_log.append(f"[try {attempt}] plugin = {resp.status} {resp.reason}")
+                        if resp.status == 200:
+                            plugin_ok = True
+                            break
+                except Exception as e:
+                    debug_log.append(f"[try {attempt}] plugin = {e}")
+                await asyncio.sleep(0.5)
+
+            embed.add_field(
+                name="Plugin Test",
+                value="✅ Connected" if plugin_ok else "❌ Failed to reach plugin",
+                inline=False
+            )
+
+            try:
+                async with session.get(f"https://api.mcsrvstat.us/2/{mc_ip}", timeout=5) as resp:
+                    data = await resp.json()
+                    if data.get("online"):
+                        embed.add_field(name="Ping Test", value="✅ Server reached", inline=False)
+                    else:
+                        embed.add_field(name="Ping Test", value="❌ Server not reached.", inline=False)
+            except Exception as e:
+                embed.add_field(name="Ping Test", value=f"❌ Ping failed: {e}", inline=False)
+
+        if not plugin_ok:
+            embed.add_field(
+                name="Debug Hint",
+                value="Run /plugins and make sure **MCxDiscord** shows up green. If it does and this still fails, report the issue at https://github.com/Semmelbrot12/MCxDiscord/issues.",
+                inline=False
+            )
+            debug_text = "\n".join(debug_log)
+            if len(debug_text) <= 1024:
+                embed.add_field(name="Plugin Logs", value=debug_text, inline=False)
+                await interaction.edit_original_response(embed=embed)
+            else:
+                await interaction.edit_original_response(embed=embed)
+                await interaction.followup.send(
+                    file=discord.File(io.StringIO(debug_text), filename="plugin_debug_log.txt"),
+                    ephemeral=True
+                )
+            return
+
+        conn = get_db()
+        if not conn:
+            embed.add_field(name="Database", value="❌ Connection failed", inline=False)
+            await interaction.edit_original_response(embed=embed)
+            return
+
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO MCxDISCORD (guild_id, channel_id, mc_ip, auth_token) VALUES (%s, %s, %s, %s)",
+                (str(interaction.guild_id), str(channel.id), full_address, auth_token)
+            )
+            conn.commit()
+            embed.add_field(name="Database", value="✅ Linked successfully", inline=False)
+            await update_presence()
+        except Exception as e:
+            embed.add_field(name="Database", value=f"❌ Error saving link: {e}", inline=False)
+        finally:
+            conn.close()
+
+        await interaction.edit_original_response(embed=embed)
+    except Exception as e:
+        print(f"[link] Command error: {e}")
+        try:
+            await interaction.response.send_message("❌ An error occurred during linking.", ephemeral=True)
+        except:
+            pass
+
+
+@bot.tree.command(name="unlink", description="Unlink a channel")
+@is_admin()
+@app_commands.describe(channel="Channel to unlink")
+async def unlink(interaction: discord.Interaction, channel: discord.TextChannel):
+    try:
+        conn = get_db()
+        if conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM MCxDISCORD WHERE guild_id = %s AND channel_id = %s", (
+                str(interaction.guild_id), str(channel.id)
+            ))
+            conn.commit()
+            conn.close()
+            await update_presence()
+            warned_versions.pop((str(interaction.guild_id), str(channel.id)), None)
+
+        embed = discord.Embed(title="🗑️ Unlink Result", color=0xff0000)
+        embed.add_field(name="Channel", value=channel.mention, inline=False)
+        embed.add_field(name="Status", value="✅ Unlinked", inline=False)
+        await interaction.response.send_message(embed=embed)
+    except Exception as e:
+        print(f"[unlink] Command error: {e}")
+        try:
+            await interaction.response.send_message("❌ An error occurred during unlinking.", ephemeral=True)
+        except:
+            pass
+
+@bot.tree.command(name="playerlist", description="Get the list of online players on the linked Minecraft server")
+@is_admin()
+async def playerlist(interaction: discord.Interaction):
+    try:
+        await interaction.response.defer(ephemeral=True)
+
+        conn = get_db()
+        if not conn:
+            await interaction.followup.send("❌ Database connection failed.", ephemeral=True)
+            return
+
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT mc_ip, auth_token FROM MCxDISCORD WHERE guild_id = %s AND channel_id = %s",
+            (str(interaction.guild_id), str(interaction.channel.id))
+        )
+        result = cursor.fetchone()
+        conn.close()
+
+        if not result:
+            await interaction.followup.send("❌ This channel is not linked to a Minecraft server.", ephemeral=True)
+            return
+
+        mc_ip, auth_token = result
+
+        # Assume the plugin exposes /playerlist endpoint that returns plain text list of players
+        url = f"http://{mc_ip}/playerlist"
+
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.get(url, timeout=5) as resp:
+                    if resp.status != 200:
+                        await interaction.followup.send(f"❌ Failed to fetch player list (HTTP {resp.status}).", ephemeral=True)
+                        return
+                    text = await resp.text()
+            except Exception as e:
+                await interaction.followup.send(f"❌ Error fetching player list: {e}", ephemeral=True)
+                return
+
+        players = text.strip().splitlines()
+        if not players or players == ['']:
+            await interaction.followup.send("No players are currently online.", ephemeral=True)
+            return
+
+        # Format list (max 2000 chars for Discord message)
+        player_list = ", ".join(players)
+        if len(player_list) > 1900:
+            player_list = player_list[:1900] + "…"
+
+        embed = discord.Embed(
+            title="🧑‍🤝‍🧑 Online Players",
+            description=player_list,
+            color=0x00ffff
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    except Exception as e:
+        print(f"[playerlist] Command error: {e}")
+        try:
+            await interaction.response.send_message("❌ An error occurred while fetching the player list.", ephemeral=True)
+        except:
+            pass
+
+
+@bot.tree.command(name="links", description="List all linked channels")
+@is_admin()
+async def links(interaction: discord.Interaction):
+    try:
+        embed = discord.Embed(title="📄 Linked Channels", color=0x00ffff)
+        conn = get_db()
+        if conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, channel_id, mc_ip FROM MCxDISCORD WHERE guild_id = %s", (
+                str(interaction.guild_id),))
+            results = cursor.fetchall()
+            conn.close()
+            if results:
+                for id_, chan_id, ip in results:
+                    embed.add_field(name=f"ID: {id_} - <#{chan_id}>", value=f"MC IP: {ip}", inline=False)
+            else:
+                embed.description = "No channels linked."
+        else:
+            embed.description = "❌ DB error. Report this to https://github.com/Semmelbrot12/MCxDiscord/issues"
+
+        await interaction.response.send_message(embed=embed)
+    except Exception as e:
+        print(f"[links] Command error: {e}")
+        try:
+            await interaction.response.send_message("❌ An error occurred listing links.", ephemeral=True)
+        except:
+            pass
+
+
+@bot.tree.command(name="reload", description="Reload the linked Minecraft plugin for this channel")
+@is_admin()
+async def reload(interaction: discord.Interaction):
+    try:
+        conn = get_db()
+        if not conn:
+            await interaction.response.send_message("❌ DB connection failed.", ephemeral=True)
+            return
+
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT mc_ip, auth_token FROM MCxDISCORD WHERE guild_id = %s AND channel_id = %s",
+            (str(interaction.guild.id), str(interaction.channel.id))
+        )
+        result = cursor.fetchone()
+        conn.close()
+
+        if not result:
+            await interaction.response.send_message("❌ This channel is not linked.", ephemeral=True)
+            return
+
+        mc_ip, token = result
+        port = 80
+        if ":" in mc_ip:
+            host, port_str = mc_ip.split(":", 1)
+            try:
+                port = int(port_str)
+            except ValueError:
+                pass
+        else:
+            host = mc_ip
+
+        await interaction.response.defer(ephemeral=True)
+        async with aiohttp.ClientSession() as session:
+            try:
+                resp = await session.post(
+                    f"http://{host}:{port}/reload",
+                    data={"token": token, "type": "all"},
+                    timeout=5
+                )
+                if resp.status == 200:
+                    await interaction.followup.send(f"✅ Reload triggered for this channel.", ephemeral=True)
+                else:
+                    await interaction.followup.send(f"❌ Reload failed (HTTP {resp.status}).", ephemeral=True)
+            except Exception as e:
+                await interaction.followup.send(f"❌ Reload error: {e}", ephemeral=True)
+    except Exception as e:
+        print(f"[reload] Command error: {e}")
+        try:
+            await interaction.response.send_message("❌ An error occurred during reload.", ephemeral=True)
+        except:
+            pass
+
+@bot.tree.command(name="broadcast", description="Broadcast a message to all linked channels")
+async def broadcast(interaction: discord.Interaction, header: str, message: str):
+    try:
+        if interaction.user.id != MCXDEV_ID:
+            embed = discord.Embed(
+                title="❌ Permission Denied",
+                description="Only runnable by MC× Staff",
+                color=0xadd8e6
+            )
+            embed.set_thumbnail(url=MCX_LOGO_URL)
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        conn = get_db()
+        if not conn:
+            await interaction.followup.send("❌ Database connection failed.", ephemeral=True)
+            return
+
+        cursor = conn.cursor()
+        cursor.execute("SELECT guild_id, channel_id FROM MCxDISCORD")
+        rows = cursor.fetchall()
+        conn.close()
+
+        embed = discord.Embed(
+            title=header,
+            description=message,
+            color=0xadd8e6
+        )
+        embed.set_thumbnail(url=MCX_LOGO_URL)
+
+        success = 0
+        for guild_id, channel_id in rows:
+            try:
+                channel = await bot.fetch_channel(int(channel_id))
+                await channel.send(embed=embed)
+                success += 1
+            except Exception as e:
+                print(f"[broadcast] Failed for {channel_id}: {e}")
+
+        await interaction.followup.send(f"📣 Broadcast sent to {success} channels.", ephemeral=True)
+    except Exception as e:
+        print(f"[broadcast] Command error: {e}")
+        try:
+            await interaction.response.send_message("❌ An error occurred during broadcast.", ephemeral=True)
+        except:
+            pass
+
+
+@bot.tree.command(name="debug", description="Send a test debug message to a linked channel by DB ID")
+@app_commands.describe(row_id="The ID from the MCxDISCORD table")
+async def debug(interaction: discord.Interaction, row_id: int):
+    try:
+        if interaction.user.id != MCXDEV_ID:
+            embed = discord.Embed(
+                title="❌ Permission Denied",
+                description="Only runnable by MC× Developers",
+                color=0xadd8e6
+            )
+            embed.set_thumbnail(url=MCX_LOGO_URL)
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        conn = get_db()
+        if not conn:
+            await interaction.followup.send("❌ Database connection failed.", ephemeral=True)
+            return
+
+        cursor = conn.cursor()
+        cursor.execute("SELECT guild_id, channel_id FROM MCxDISCORD WHERE id = %s", (row_id,))
+        result = cursor.fetchone()
+        conn.close()
+
+        if not result:
+            await interaction.followup.send(f"❌ No entry found with ID {row_id}.", ephemeral=True)
+            return
+
+        guild_id, channel_id = result
+        embed = discord.Embed(
+            title="Debug",
+            description="This message was triggered by a MC×Discord developer.",
+            color=0xadd8e6
+        )
+        embed.set_thumbnail(url=MCX_LOGO_URL)
+
+        try:
+            channel = await bot.fetch_channel(int(channel_id))
+            await channel.send(embed=embed)
+            status = "✅ Sent successfully."
+        except discord.Forbidden:
+            status = "❌ Missing permissions to send."
+        except discord.NotFound:
+            status = "❌ Channel not found."
+        except Exception as e:
+            status = f"❌ Error: {type(e).__name__}: {e}"
+
+        guild = bot.get_guild(int(guild_id))
+        guild_name = guild.name if guild else f"{guild_id} (unknown)"
+        try:
+            channel_obj = await bot.fetch_channel(int(channel_id))
+            channel_name = f"{channel_obj.name} ({channel_id})"
+            channel_mention = channel_obj.mention
+        except Exception:
+            channel_name = f"{channel_id}"
+            channel_mention = f"<#{channel_id}>"
+
+        result_embed = discord.Embed(
+            title="📡 Debug Result",
+            color=0xadd8e6
+        )
+        result_embed.add_field(name="Guild", value=guild_name, inline=False)
+        result_embed.add_field(name="Channel", value=f"{channel_name} ({channel_mention})", inline=False)
+        result_embed.add_field(name="Status", value=status, inline=False)
+        await interaction.followup.send(embed=result_embed, ephemeral=True)
+    except Exception as e:
+        print(f"[debug] Command error: {e}")
+        try:
+            await interaction.response.send_message("❌ An error occurred during debug.", ephemeral=True)
+        except:
+            pass
+
+
+@bot.event
+async def on_message(message):
+    try:
+        if message.author.bot or not message.guild:
+            return
+
+        conn = get_db()
+        if not conn:
+            return
+
+        cursor = conn.cursor()
+        cursor.execute("SELECT mc_ip, auth_token FROM MCxDISCORD WHERE guild_id = %s AND channel_id = %s", (
+            str(message.guild.id), str(message.channel.id)
+        ))
+        result = cursor.fetchone()
+        conn.close()
+
+        if result:
+            mc_ip, auth_token = result
+            async with aiohttp.ClientSession() as session:
+                try:
+                    resp = await session.post(
+                        f"http://{mc_ip}/chat",
+                        data={"token": auth_token, "user": message.author.display_name, "msg": message.content},
+                        timeout=5
+                    )
+                    if resp.status == 403:
+                        try:
+                            await message.add_reaction("❌")
+                            blocked_messages[message.id] = message.author.id
+                        except Exception as e:
+                            print(f"[moderation] Failed to react: {e}")
+                except Exception as e:
+                    print(f"[moderation] Chat forwarding error: {e}")
+    except Exception as e:
+        print(f"[on_message] Error: {e}")
+
+
+@bot.event
+async def on_reaction_add(reaction, user):
+    try:
+        if reaction.message.id not in blocked_messages:
+            return
+        if str(reaction.emoji) != "❌":
+            return
+
+        original_author_id = blocked_messages[reaction.message.id]
+        if user.id != original_author_id:
+            return
+
+        embed = discord.Embed(
+            title="⚠️ Message Blocked by Moderation",
+            description="ChatMod Rule Violation. Please keep your messages appropriate.",
+            color=0xff0000
+        )
+        embed.set_footer(text="If you believe this was a mistake, contact a moderator.")
+        try:
+            await reaction.message.channel.send(content=user.mention, embed=embed)
+        except Exception as e:
+            print(f"[moderation] Failed to send moderation embed: {e}")
+    except Exception as e:
+        print(f"[on_reaction_add] Error: {e}")
+
+
+@tasks.loop(hours=24)
+async def unlinked_reminder():
+    try:
+        today = datetime.utcnow().date()
+
+        conn = get_db()
+        linked_guilds = set()
+        if conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT DISTINCT guild_id FROM MCxDISCORD")
+            linked_guilds.update(row[0] for row in cursor.fetchall())
+            conn.close()
+
+        for guild in bot.guilds:
+            try:
+                if str(guild.id) in linked_guilds:
+                    continue
+                if last_unlinked_ping.get(guild.id) == today:
+                    continue
+
+                embed = discord.Embed(
+                    title="You didn't link yet!",
+                    description=(
+                        "To experience the full power of **MC×Discord**, please use /link "
+                        "inside the Minecraft channel you want to connect.\n\n"
+                        "This enables chat, version checking, broadcast alerts, and more!"
+                    ),
+                    color=0x3498db  # Blue
+                )
+
+                for channel in guild.text_channels:
+                    try:
+                        await channel.send(embed=embed)
+                    except Exception:
+                        continue
+
+                last_unlinked_ping[guild.id] = today
+            except Exception as e:
+                print(f"[unlinked_reminder] Failed sending to guild {guild.id}: {e}")
+    except Exception as e:
+        print(f"[unlinked_reminder] Error in loop: {e}")
+
+
+TOKEN_FILE = "token.txt"
+TOKEN_CHECKER = "token_checker.py"
+
+if os.path.exists(TOKEN_FILE):
+    with open(TOKEN_FILE, "r") as f:
+        token = f.read().strip()
+    # run your bot with the token
+    bot.run(token)
+else:
+    # if token.txt does not exist, start token_checker.py
+    subprocess.run(["python", TOKEN_CHECKER])
