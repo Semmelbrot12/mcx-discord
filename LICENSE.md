@@ -1,34 +1,28 @@
-# MC× License (Non-Commercial, Attribution, Branding Protected)
+BSD 3-Clause License
 
-Copyright (c) 2025 MC×
+Copyright (c) 2025, Semmelbrot12
 
-## Permissions
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
 
-You are allowed to:
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
 
-- **Use** the software for personal or non-commercial purposes.
-- **Modify** the software for personal or non-commercial purposes.
-- **Fork** the software, provided that you comply with the terms below.
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
 
-## Requirements
+3. Neither the name of the copyright holder nor the names of its
+   contributors may be used to endorse or promote products derived from
+   this software without specific prior written permission.
 
-If you fork or redistribute this software (in whole or in part):
-
-1. **Attribution**  
-   - You must clearly credit MC× in any user-facing materials, documentation, or interface elements.  
-   - Simply placing a comment in code is **not sufficient**.
-
-2. **Branding Protection**  
-   - You may **not remove or alter the name “MC×”** in `plugin.yml`, other metadata files, or any user-facing output.  
-   - You may **not rebrand** this software as your own.
-
-3. **License Inheritance**  
-   - Any redistribution or derivative works must be licensed under **this same license**.
-
-## Restrictions
-
-- **Commercial Use**: You may **not sell, license, or profit from** this software or its derivatives without **explicit written permission** from semmelbrot12@breadzonemc.net.
-
-## Disclaimer
-
-This software is provided "as is", without warranty of any kind. MC× is not responsible for any damage or data loss resulting from its use.
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
