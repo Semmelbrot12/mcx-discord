@@ -1,9 +1,11 @@
+
 import io
 import os
 import sys
 import subprocess
 import asyncio
 import logging
+import json
 from datetime import datetime
 
 # Auto-install packages
@@ -50,13 +52,36 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-db_config = {
-    "host": "hypnotic.dathost.net",
-    "port": 3306,
-    "user": "Z1b1qwrCrMjeubsY",
-    "password": "PU7N__qqXQI",
-    "database": "6756f5ab0ac2acc8deb9bb18"
-}
+
+# --- Secure DB config loading ---
+DB_CONFIG_FILE = "db_config.json"
+def prompt_db_config():
+    print("\n=== MCxDiscord Database Setup ===")
+    host = input("MySQL Host: ").strip()
+    port = input("MySQL Port [3306]: ").strip() or "3306"
+    user = input("MySQL User: ").strip()
+    password = input("MySQL Password: ").strip()
+    database = input("MySQL Database: ").strip()
+    config = {
+        "host": host,
+        "port": int(port),
+        "user": user,
+        "password": password,
+        "database": database
+    }
+    with open(DB_CONFIG_FILE, "w") as f:
+        json.dump(config, f)
+    print("Saved DB config to db_config.json. Restart the bot if you change these settings.")
+    return config
+
+def load_db_config():
+    if os.path.exists(DB_CONFIG_FILE):
+        with open(DB_CONFIG_FILE, "r") as f:
+            return json.load(f)
+    else:
+        return prompt_db_config()
+
+db_config = load_db_config()
 
 warned_versions = {}  # (guild_id, channel_id): version_str or "fail" or "ok"
 blocked_messages = {}
@@ -462,27 +487,125 @@ async def links(interaction: discord.Interaction):
             pass
 
 
-@bot.tree.command(name="reload", description="Reload the linked Minecraft plugin for this channel")
+
+# --- /manage command with embed GUI ---
+from discord import ui
+
+class ManageView(ui.View):
+    def __init__(self, mc_ip, port, token):
+        super().__init__(timeout=120)
+        self.mc_ip = mc_ip
+        self.port = port
+        self.token = token
+
+    async def fetch_stats(self):
+        url = f"http://{self.mc_ip}:{self.port}/server/stats"
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, data={"token": self.token}, timeout=7) as resp:
+                return await resp.json()
+
+    async def fetch_players(self):
+        url = f"http://{self.mc_ip}:{self.port}/server/players"
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, data={"token": self.token}, timeout=7) as resp:
+                return await resp.json()
+
+    async def fetch_embed(self):
+        url = f"http://{self.mc_ip}:{self.port}/server/embed"
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, data={"token": self.token}, timeout=7) as resp:
+                return await resp.json()
+
+    async def run_command(self, cmd):
+        url = f"http://{self.mc_ip}:{self.port}/server/command"
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, data={"token": self.token, "cmd": cmd}, timeout=10) as resp:
+                return await resp.json()
+
+    @ui.button(label="Server Stats", style=discord.ButtonStyle.primary, custom_id="stats")
+    async def stats_btn(self, interaction: discord.Interaction, button: ui.Button):
+        try:
+            stats = await self.fetch_stats()
+            embed = discord.Embed(title="Server Stats", color=0x3498db)
+            uptime = stats.get("uptimeMs", 0) // 1000
+            embed.add_field(name="Uptime", value=f"{uptime//3600:02}:{(uptime%3600)//60:02}:{uptime%60:02}", inline=True)
+            cpu = stats.get("cpu", {})
+            embed.add_field(name="CPU", value=f"System: {cpu.get('systemPercent',-1)}% | Proc: {cpu.get('processPercent',-1)}% | Cores: {cpu.get('cores','?')}", inline=True)
+            ram = stats.get("ram", {})
+            embed.add_field(name="RAM", value=f"{ram.get('heapUsedBytes',0)//(1024**2)}/{ram.get('heapTotalBytes',0)//(1024**2)} MB", inline=True)
+            storage = stats.get("storage", {})
+            embed.add_field(name="Storage", value=f"{storage.get('usedBytes',0)//(1024**3)}/{storage.get('totalBytes',0)//(1024**3)} GB", inline=True)
+            await interaction.response.edit_message(embed=embed, view=self)
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Error fetching stats: {e}", ephemeral=True)
+
+    @ui.button(label="Players", style=discord.ButtonStyle.secondary, custom_id="players")
+    async def players_btn(self, interaction: discord.Interaction, button: ui.Button):
+        try:
+            data = await self.fetch_players()
+            players = data.get("players", [])
+            names = ", ".join(p.get("name","?") for p in players) or "No players online."
+            embed = discord.Embed(title=f"Players ({len(players)})", description=names, color=0x00ffff)
+            await interaction.response.edit_message(embed=embed, view=self)
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Error fetching players: {e}", ephemeral=True)
+
+    @ui.button(label="Run Command", style=discord.ButtonStyle.danger, custom_id="command")
+    async def command_btn(self, interaction: discord.Interaction, button: ui.Button):
+        modal = CommandModal(self)
+        await interaction.response.send_modal(modal)
+
+    @ui.button(label="Show Embed", style=discord.ButtonStyle.success, custom_id="embed")
+    async def embed_btn(self, interaction: discord.Interaction, button: ui.Button):
+        try:
+            data = await self.fetch_embed()
+            # Discord webhook embed payload
+            embeds = data.get("embeds", [])
+            if embeds:
+                e = embeds[0]
+                embed = discord.Embed(title=e.get("title","Server Status"), color=0xadd8e6)
+                for f in e.get("fields", []):
+                    embed.add_field(name=f.get("name","-"), value=f.get("value","-"), inline=f.get("inline",False))
+                await interaction.response.edit_message(embed=embed, view=self)
+            else:
+                await interaction.response.send_message("❌ No embed data returned.", ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Error fetching embed: {e}", ephemeral=True)
+
+class CommandModal(ui.Modal, title="Run Console Command"):
+    cmd = ui.TextInput(label="Command", placeholder="say Hello world", required=True)
+    def __init__(self, view):
+        super().__init__()
+        self.view = view
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            result = await self.view.run_command(self.cmd.value)
+            ok = result.get("ok", False)
+            msg = result.get("cmd") or result.get("error") or "No response."
+            color = 0x00ff00 if ok else 0xff0000
+            embed = discord.Embed(title="Command Result", description=msg, color=color)
+            await interaction.response.edit_message(embed=embed, view=self.view)
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Error running command: {e}", ephemeral=True)
+
+@bot.tree.command(name="manage", description="Manage the linked Minecraft server (GUI)")
 @is_admin()
-async def reload(interaction: discord.Interaction):
+async def manage(interaction: discord.Interaction):
     try:
         conn = get_db()
         if not conn:
             await interaction.response.send_message("❌ DB connection failed.", ephemeral=True)
             return
-
         cursor = conn.cursor()
         cursor.execute(
             "SELECT mc_ip, auth_token FROM MCxDISCORD WHERE guild_id = %s AND channel_id = %s",
-            (str(interaction.guild.id), str(interaction.channel.id))
+            (str(interaction.guild_id), str(interaction.channel.id))
         )
         result = cursor.fetchone()
         conn.close()
-
         if not result:
             await interaction.response.send_message("❌ This channel is not linked.", ephemeral=True)
             return
-
         mc_ip, token = result
         port = 80
         if ":" in mc_ip:
@@ -493,25 +616,13 @@ async def reload(interaction: discord.Interaction):
                 pass
         else:
             host = mc_ip
-
-        await interaction.response.defer(ephemeral=True)
-        async with aiohttp.ClientSession() as session:
-            try:
-                resp = await session.post(
-                    f"http://{host}:{port}/reload",
-                    data={"token": token, "type": "all"},
-                    timeout=5
-                )
-                if resp.status == 200:
-                    await interaction.followup.send(f"✅ Reload triggered for this channel.", ephemeral=True)
-                else:
-                    await interaction.followup.send(f"❌ Reload failed (HTTP {resp.status}).", ephemeral=True)
-            except Exception as e:
-                await interaction.followup.send(f"❌ Reload error: {e}", ephemeral=True)
+        view = ManageView(host, port, token)
+        embed = discord.Embed(title="MC×Discord Server Manager", description="Use the buttons below to manage your server.", color=0x3498db)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
     except Exception as e:
-        print(f"[reload] Command error: {e}")
+        print(f"[manage] Command error: {e}")
         try:
-            await interaction.response.send_message("❌ An error occurred during reload.", ephemeral=True)
+            await interaction.response.send_message("❌ An error occurred in /manage.", ephemeral=True)
         except:
             pass
 
