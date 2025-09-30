@@ -501,8 +501,53 @@ async def links(interaction: discord.Interaction):
 
 
 
-# --- /manage command with embed GUI ---
+# --- /manage command with embed GUI and PTR check ---
 from discord import ui
+import time, socket, json, asyncio, aiohttp, discord
+
+# --- PTR cache setup ---
+PTR_CACHE_FILE = "ptr_cache.json"
+PTR_CACHE_DURATION = 24 * 3600  # 24 hours
+
+if os.path.exists(PTR_CACHE_FILE):
+    try:
+        with open(PTR_CACHE_FILE, "r") as f:
+            ptr_cache = json.load(f)
+    except Exception:
+        ptr_cache = {}
+else:
+    ptr_cache = {}
+
+def save_ptr_cache():
+    try:
+        with open(PTR_CACHE_FILE, "w") as f:
+            json.dump(ptr_cache, f, indent=2)
+    except Exception as e:
+        print(f"[PTR Cache] Failed to save: {e}")
+
+async def resolve_ptr(host):
+    loop = asyncio.get_event_loop()
+    try:
+        return await loop.run_in_executor(None, lambda: socket.gethostbyaddr(host)[0].lower())
+    except Exception:
+        return "unknown"
+
+# --- GUI classes ---
+class CommandModal(ui.Modal, title="Run Console Command"):
+    cmd = ui.TextInput(label="Command", placeholder="say Hello world", required=True)
+    def __init__(self, view):
+        super().__init__()
+        self.view = view
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            result = await self.view.run_command(self.cmd.value)
+            ok = result.get("ok", False)
+            msg = result.get("cmd") or result.get("error") or "No response."
+            color = 0x00ff00 if ok else 0xff0000
+            embed = discord.Embed(title="Command Result", description=msg, color=color)
+            await interaction.response.edit_message(embed=embed, view=self.view)
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Error running command: {e}", ephemeral=True)
 
 class ManageView(ui.View):
     def __init__(self, mc_ip, port, token):
@@ -572,7 +617,6 @@ class ManageView(ui.View):
     async def embed_btn(self, interaction: discord.Interaction, button: ui.Button):
         try:
             data = await self.fetch_embed()
-            # Discord webhook embed payload
             embeds = data.get("embeds", [])
             if embeds:
                 e = embeds[0]
@@ -585,21 +629,6 @@ class ManageView(ui.View):
         except Exception as e:
             await interaction.response.send_message(f"❌ Error fetching embed: {e}", ephemeral=True)
 
-class CommandModal(ui.Modal, title="Run Console Command"):
-    cmd = ui.TextInput(label="Command", placeholder="say Hello world", required=True)
-    def __init__(self, view):
-        super().__init__()
-        self.view = view
-    async def on_submit(self, interaction: discord.Interaction):
-        try:
-            result = await self.view.run_command(self.cmd.value)
-            ok = result.get("ok", False)
-            msg = result.get("cmd") or result.get("error") or "No response."
-            color = 0x00ff00 if ok else 0xff0000
-            embed = discord.Embed(title="Command Result", description=msg, color=color)
-            await interaction.response.edit_message(embed=embed, view=self.view)
-        except Exception as e:
-            await interaction.response.send_message(f"❌ Error running command: {e}", ephemeral=True)
 
 @bot.tree.command(name="manage", description="Manage the linked Minecraft server (GUI)")
 @is_admin()
@@ -619,6 +648,7 @@ async def manage(interaction: discord.Interaction):
         if not result:
             await interaction.response.send_message("❌ This channel is not linked.", ephemeral=True)
             return
+
         mc_ip, token = result
         port = 80
         if ":" in mc_ip:
@@ -629,15 +659,50 @@ async def manage(interaction: discord.Interaction):
                 pass
         else:
             host = mc_ip
+
+        # --- PTR check with 24h cache ---
+        cache_key = f"{interaction.guild_id}-{interaction.channel.id}"
+        now = time.time()
+        cached_entry = ptr_cache.get(cache_key)
+        ptr = "unknown"
+        warning_msg = None
+
+        if cached_entry and now - cached_entry.get("timestamp", 0) < PTR_CACHE_DURATION:
+            ptr = cached_entry.get("ptr", "unknown")
+        else:
+            # notify user that a one-time check is running
+            await interaction.response.send_message(
+                "🔍 Running a one-time host check (PTR lookup)...", ephemeral=True
+            )
+            ptr = await resolve_ptr(host)
+            ptr_cache[cache_key] = {"ptr": ptr, "timestamp": now}
+            save_ptr_cache()
+
+        # Hetzner / FreeMcServer.net detection
+        if "hetzner" in ptr:
+            warning_msg = (
+                "⚠️ We suspect this server is hosted on Hetzner/FreeMcServer.net, "
+                "and the remote console may be limited."
+            )
+
+        # Send main GUI
         view = ManageView(host, port, token)
-        embed = discord.Embed(title="MC×Discord Server Manager", description="Use the buttons below to manage your server.", color=0x3498db)
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        embed = discord.Embed(
+            title="MC×Discord Server Manager",
+            description="Use the buttons below to manage your server.",
+            color=0x3498db
+        )
+        if warning_msg:
+            embed.add_field(name="Notice", value=warning_msg, inline=False)
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+
     except Exception as e:
         print(f"[manage] Command error: {e}")
         try:
             await interaction.response.send_message("❌ An error occurred in /manage.", ephemeral=True)
         except:
             pass
+
 
 @bot.tree.command(name="broadcast", description="Broadcast a message to all linked channels")
 async def broadcast(interaction: discord.Interaction, header: str, message: str):
