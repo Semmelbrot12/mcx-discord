@@ -53,15 +53,25 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 
-# --- Secure DB config loading ---
 DB_CONFIG_FILE = "db_config.json"
+
 def prompt_db_config():
     print("\n=== MCxDiscord Database Setup ===")
+
     host = input("MySQL Host: ").strip()
+
+    print()
     port = input("MySQL Port [3306]: ").strip() or "3306"
+
+    print()
     user = input("MySQL User: ").strip()
+
+    print()
     password = input("MySQL Password: ").strip()
+
+    print()
     database = input("MySQL Database: ").strip()
+
     config = {
         "host": host,
         "port": int(port),
@@ -69,9 +79,12 @@ def prompt_db_config():
         "password": password,
         "database": database
     }
+
     with open(DB_CONFIG_FILE, "w") as f:
-        json.dump(config, f)
-    print("Saved DB config to db_config.json. Restart the bot if you change these settings.")
+        json.dump(config, f, indent=2)
+
+    print("\n✅ Saved DB config to db_config.json.")
+    print("   Restart the bot if you change these settings.\n")
     return config
 
 def load_db_config():
