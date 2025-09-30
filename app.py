@@ -1,9 +1,11 @@
+
 import io
 import os
 import sys
 import subprocess
 import asyncio
 import logging
+import json
 from datetime import datetime
 
 # Auto-install packages
@@ -50,13 +52,36 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-db_config = {
-    "host": "hypnotic.dathost.net",
-    "port": 3306,
-    "user": "Z1b1qwrCrMjeubsY",
-    "password": "PU7N__qqXQI",
-    "database": "6756f5ab0ac2acc8deb9bb18"
-}
+
+# --- Secure DB config loading ---
+DB_CONFIG_FILE = "db_config.json"
+def prompt_db_config():
+    print("\n=== MCxDiscord Database Setup ===")
+    host = input("MySQL Host: ").strip()
+    port = input("MySQL Port [3306]: ").strip() or "3306"
+    user = input("MySQL User: ").strip()
+    password = input("MySQL Password: ").strip()
+    database = input("MySQL Database: ").strip()
+    config = {
+        "host": host,
+        "port": int(port),
+        "user": user,
+        "password": password,
+        "database": database
+    }
+    with open(DB_CONFIG_FILE, "w") as f:
+        json.dump(config, f)
+    print("Saved DB config to db_config.json. Restart the bot if you change these settings.")
+    return config
+
+def load_db_config():
+    if os.path.exists(DB_CONFIG_FILE):
+        with open(DB_CONFIG_FILE, "r") as f:
+            return json.load(f)
+    else:
+        return prompt_db_config()
+
+db_config = load_db_config()
 
 warned_versions = {}  # (guild_id, channel_id): version_str or "fail" or "ok"
 blocked_messages = {}
