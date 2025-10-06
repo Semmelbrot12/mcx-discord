@@ -386,9 +386,23 @@ class GitPasswordModal(ui.Modal, title="Git Password / Token"):
 @bot.event
 async def on_ready():
     print(f"[ready] Logged in as {bot.user}")
-    # Sync commands to your guild (replace with your guild ID for testing)
-    guild_id = 123456789012345678  # <-- your guild ID here
-    await bot.tree.sync(guild=discord.Object(id=guild_id))
+    try:
+        await bot.tree.sync()  # global sync
+        print("Slash commands synced!")
+    except discord.errors.Forbidden:
+        print("⚠️ Failed to sync commands: missing permissions!")
+        # DM the bot owner
+        app_info = await bot.application_info()
+        owner = app_info.owner
+        try:
+            await owner.send(
+                "❌ I did not have the required permissions to register slash commands!\n"
+                "Please re-add me to the server with the proper permissions:\n"
+                "[Click here to invite me](https://discord.com/oauth2/authorize?client_id=1369292341059387433&permissions=8&scope=bot%20applications.commands)"
+            )
+        except Exception as e:
+            print(f"Failed to DM owner: {e}")
+
 
 # --- Slash command ---
 from discord import app_commands, ui, Interaction, Embed
