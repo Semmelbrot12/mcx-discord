@@ -52,7 +52,7 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-
+GLOBAL_DATA_FILE = "global_data.json"
 DB_CONFIG_FILE = "db_config.json"
 
 def prompt_db_config():
@@ -102,6 +102,11 @@ last_unlinked_ping = {}
 MCXDEV_ID = 806806527192334356
 MCX_LOGO_URL = "https://cdn.modrinth.com/data/l3UqzYGx/9aca66c04eef38ce55e85c642962e1fa0b29ba1c.png"
 
+debug_global_stats = {
+    "messages": [],
+    "versions": {},
+    "guilds": []
+}
 
 def get_db():
     try:
@@ -137,17 +142,47 @@ async def update_presence():
     except Exception as e:
         print(f"[presence] Failed to update presence: {e}")
 
+@tasks.loop(seconds=10)
+async def daily_calculator():
+    raw_current_time = time.time()
+    current_time = time.gmtime(raw_current_time)
+    required_time = datetime(0, 0, 0, hour=0, minute=0).time()
+
+    if required_time.minute == current_time.tm_min and required_time.hour == current_time.tm_hour:
+        for cell in debug_global_stats["messages"]:
+            cell[2].append(cell[1]) # Adds counted messages from on_message event into the list
+            cell[1] = 0 # Resets the messages
 
 @bot.event
 async def on_ready():
     try:
+        if not os.path.exists(GLOBAL_DATA_FILE):
+            with open(GLOBAL_DATA_FILE, "w") as f:
+                json.dump(debug_global_stats, f)
+        else:
+            with open(GLOBAL_DATA_FILE, "r") as f:
+                debug_global_stats = json.load(f)
         await bot.tree.sync()
         await update_presence()
         version_checker.start()
+        daily_calculator.start()
+        
         print(f"[ready] Logged in as {bot.user}")
     except Exception as e:
         print(f"[ready] Error during on_ready: {e}")
 
+@bot.event
+async def on_disconnect():
+    with open(GLOBAL_DATA_FILE, "w") as f:
+        json.dump(GLOBAL_DATA_FILE, f)
+
+@bot.event
+async def on_guild_join(guild: discord.Guild):
+    debug_global_stats["guilds"].add({"id": guild.id, "name": guild.name})
+
+@bot.event
+async def on_guild_remove(guild: discord.Guild):
+    debug_global_stats["guilds"].remove({"id": guild.id, "name": guild.name})
 
 def is_admin():
     async def predicate(interaction: discord.Interaction):
@@ -165,11 +200,15 @@ async def get_latest_versions():
                 async with session.get("https://api.modrinth.com/v2/project/mcxdiscord/version", timeout=10) as resp:
                     data = await resp.json()
                     versions = {}
+                    to_update = {}
                     for version in data:
                         ver = version["version_number"]
+                        downloads = version["downloads"]
+                        to_update[ver] = downloads
                         platform = "spigot" if "spigot" in ver.lower() else "paper"
                         if platform not in versions:
                             versions[platform] = ver
+                    debug_global_stats["versions"] = to_update
                     return versions
             except Exception as e:
                 print(f"[version check] Failed to fetch Modrinth versions: {e}")
@@ -319,6 +358,51 @@ async def gitupdate(interaction: discord.Interaction, force: bool = False):
         await interaction.followup.send(f"❌ Git operation failed:\n```\n{e}\n```", ephemeral=True)
     except Exception as e:
         await interaction.followup.send(f"❌ Unexpected error:\n```\n{e}\n```", ephemeral=True)
+
+@bot.tree.command(name="stats", description="Displays stats of the bot(For admins)")
+@is_admin()
+async def stats(interaction: discord.Interaction):
+    async def ver_callback(interaction: discord.Interaction):
+        versions = discord.Embed(title="Versions", description="How many users are using those versions")
+        for entry in debug_global_stats["versions"].items():
+            versions.add_field(name="\r", value=f"{entry[0]}: {entry[1]}")
+        await interaction.followup.edit_message(embed=versions, view=view1)
+    
+    async def guilds_callback(interaction: discord.Interaction):
+        guilds = discord.Embed(title="Guilds", description="What guilds is using this bot")
+        for entry in debug_global_stats["guilds"].items():
+            guilds.add_field(name="\r", value=f"{entry[1]}({entry[0]})")
+        await interaction.followup.edit_message(embed=guilds)
+
+    async def messages_callback(interaction: discord.Interaction):
+        messages = discord.Embed(title="Daily messages")
+        for entry in debug_global_stats["messages"]:
+            output_number = 0
+            if len(entry[2]) == 1:
+                output_number = entry[2][0]
+            elif len(entry[2]) == 0:
+                output_number = entry[1]
+            else:
+                output_number = (sum(entry[2])) / len(entry[2])
+            messages.add_field(name="\r", value=f"{entry[0]}: {output_number}")
+            
+    main: discord.Embed = discord.Embed(title="Global bot stats", description=f"The amount of guilds this bot is being used in is {len(debug_global_stats['guilds'])}.\nClick any of the buttons for more data")
+
+    view1 = discord.ui.View()
+
+    vers = discord.ui.Button(label="Versions")
+    guild_count = discord.ui.Button(label="Guilds")
+    msgs = discord.ui.Button(label="Messages")
+
+    vers.callback = ver_callback(interaction)
+    guild_count.callback = guilds_callback(interaction)
+    msgs.callback = messages_callback(interaction)
+
+    view1.add_item(vers)
+    view1.add_item(guild_count)
+    view1.add_item(msgs)
+
+    await interaction.response.send_message(embed=main, view=view1)
 
 @bot.tree.command(name="link", description="Link a channel to a Minecraft server")
 @is_admin()
@@ -735,7 +819,7 @@ async def manage(interaction: discord.Interaction):
 
                 @discord.ui.button(label="I am not using FreeMcServer.net", style=discord.ButtonStyle.red, emoji="🚫")
                 async def confirm(self, interaction_btn: discord.Interaction, button: discord.ui.Button):
-                    log_channel = interaction.client.get_channel(REVIEW_LOG_CHANNEL_ID)
+                    log_channel = interaction.client.get_channel(1386716323706437683)
                     if log_channel:
                         embed = discord.Embed(
                             title="🕵️ Host Review Requested",
@@ -903,7 +987,15 @@ async def debug(interaction: discord.Interaction, row_id: int):
 
 
 @bot.event
-async def on_message(message):
+async def on_message(message: discord.Message):
+    found = False
+    for cell in debug_global_stats["messages"]:
+        if cell[0] == message.guild.name:
+            found = True
+            cell[1] += 1
+    if not found:
+        debug_global_stats["messages"].append([message.guild.name, 0, []])
+
     try:
         if message.author.bot or not message.guild:
             return
