@@ -403,67 +403,6 @@ async def on_ready():
         except Exception as e:
             print(f"Failed to DM owner: {e}")
 
-
-from discord.ext import commands
-from discord import Embed, ui, ButtonStyle, Interaction
-import discord
-
-intents = discord.Intents.default()
-intents.guilds = True
-intents.messages = True
-intents.message_content = True
-
-bot = commands.Bot(command_prefix="-cmd ", intents=intents)
-
-# -------------------
-# Prefix command only
-# -------------------
-@bot.command(name="stats")
-@commands.has_permissions(administrator=True)
-async def stats(ctx):
-    main_embed = Embed(
-        title="Global bot stats",
-        description=f"The bot is in {len(debug_global_stats['guilds'])} guilds.\nClick a button for more info."
-    )
-    view = ui.View()
-
-    async def ver_callback(interaction: Interaction):
-        embed = Embed(title="Versions", description="Users by version")
-        for version, count in debug_global_stats["versions"].items():
-            embed.add_field(name="\u200b", value=f"{version}: {count}")
-        await interaction.response.edit_message(embed=embed, view=view)
-
-    async def guilds_callback(interaction: Interaction):
-        embed = Embed(title="Guilds", description="Guilds using the bot")
-        for guild_id, name in debug_global_stats["guilds"].items():
-            embed.add_field(name="\u200b", value=f"{name} ({guild_id})")
-        await interaction.response.edit_message(embed=embed, view=view)
-
-    async def messages_callback(interaction: Interaction):
-        embed = Embed(title="Daily messages")
-        for entry in debug_global_stats["messages"]:
-            if len(entry[2]) == 1:
-                output_number = entry[2][0]
-            elif len(entry[2]) == 0:
-                output_number = entry[1]
-            else:
-                output_number = sum(entry[2]) / len(entry[2])
-            embed.add_field(name="\u200b", value=f"{entry[0]}: {output_number}")
-        await interaction.response.edit_message(embed=embed, view=view)
-
-    btn_versions = ui.Button(label="Versions", style=ButtonStyle.primary)
-    btn_versions.callback = ver_callback
-    btn_guilds = ui.Button(label="Guilds", style=ButtonStyle.primary)
-    btn_guilds.callback = guilds_callback
-    btn_messages = ui.Button(label="Messages", style=ButtonStyle.primary)
-    btn_messages.callback = messages_callback
-
-    view.add_item(btn_versions)
-    view.add_item(btn_guilds)
-    view.add_item(btn_messages)
-
-    await ctx.send(embed=main_embed, view=view)
-
 @bot.tree.command(name="link", description="Link a channel to a Minecraft server")
 @is_admin()
 @app_commands.describe(
@@ -969,7 +908,30 @@ async def broadcast(interaction: discord.Interaction, header: str, message: str)
             await interaction.response.send_message("❌ An error occurred during broadcast.", ephemeral=True)
         except:
             pass
+            
+bot.start_time = datetime.datetime.utcnow()
 
+@bot.tree.command(name="stats", description="Show server and bot statistics")
+async def stats(interaction: discord.Interaction):
+    guild = interaction.guild
+    if guild is None:
+        await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+        return
+
+    total_members = guild.member_count
+    online_members = sum(1 for m in guild.members if m.status != discord.Status.offline)
+
+    uptime = datetime.datetime.utcnow() - bot.start_time
+    uptime_str = str(uptime).split(".")[0]  # remove microseconds
+
+    embed = discord.Embed(title=f"{guild.name} Stats", color=discord.Color.blue())
+    embed.add_field(name="Total Members", value=total_members)
+    embed.add_field(name="Online Members", value=online_members)
+    embed.add_field(name="Server Created", value=guild.created_at.strftime("%Y-%m-%d"))
+    embed.add_field(name="Bot Uptime", value=uptime_str)
+    embed.set_thumbnail(url=guild.icon.url if guild.icon else None)
+
+    await interaction.response.send_message(embed=embed)
 
 @bot.tree.command(name="debug", description="Send a test debug message to a linked channel by DB ID")
 @app_commands.describe(row_id="The ID from the MCxDISCORD table")
