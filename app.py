@@ -1014,7 +1014,7 @@ async def stats(interaction: discord.Interaction):
         database=db_config["database"]
     )
     cursor = connection.cursor()
-    cursor.execute("SELECT guild_id, mc_ip FROM servers")
+    cursor.execute("SELECT guild_id, mc_ip FROM MCxDISCORD")
     rows = cursor.fetchall()
     cursor.close()
     connection.close()
