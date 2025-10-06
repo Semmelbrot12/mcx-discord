@@ -932,6 +932,7 @@ async def on_message(message):
             bot.server_versions[guild_id] = "1.21.1"  # placeholder
     await bot.process_commands(message)
 
+import json
 import aiohttp
 import mysql.connector
 from io import BytesIO
@@ -941,6 +942,10 @@ from datetime import datetime
 
 @bot.tree.command(name="stats", description="Show bot usage statistics with charts")
 async def stats(interaction: discord.Interaction):
+    # --- Load DB config ---
+    with open("db_config.json", "r") as f:
+        db_config = json.load(f)
+
     # --- Text stats ---
     uptime = datetime.utcnow() - bot.start_time
     uptime_str = str(uptime).split(".")[0]
@@ -1001,7 +1006,13 @@ async def stats(interaction: discord.Interaction):
 
     # --- Fetch plugin versions via HTTP ---
     bot.server_versions = {}
-    connection = mysql.connector.connect(host="HOST", user="USER", password="PASS", database="DB")
+    connection = mysql.connector.connect(
+        host=db_config["host"],
+        port=db_config["port"],
+        user=db_config["user"],
+        password=db_config["password"],
+        database=db_config["database"]
+    )
     cursor = connection.cursor()
     cursor.execute("SELECT guild_id, mc_ip FROM servers")
     rows = cursor.fetchall()
@@ -1016,7 +1027,6 @@ async def stats(interaction: discord.Interaction):
                 async with session.get(url, timeout=5) as resp:
                     if resp.status == 200:
                         data = await resp.json()
-                        # Use whatever result the server returns as the version
                         bot.server_versions[guild_id] = data.get("version", "Unknown")
                     else:
                         bot.server_versions[guild_id] = "Unknown"
@@ -1036,6 +1046,7 @@ async def stats(interaction: discord.Interaction):
         files.append(discord.File(buf_versions, filename="versions.png"))
 
     await interaction.response.send_message(embed=embed, files=files)
+
 
 @bot.tree.command(name="debug", description="Send a test debug message to a linked channel by DB ID")
 @app_commands.describe(row_id="The ID from the MCxDISCORD table")
