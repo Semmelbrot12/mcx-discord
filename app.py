@@ -317,8 +317,72 @@ async def version_checker():
     except Exception as e:
         print(f"[version_checker] Error in loop: {e}")
 
-AUTHORIZED_USERS = {806806527192334356}  # only these users can use /gitupdate
+import asyncio, subprocess, sys, os, tempfile
+from discord import ui, app_commands
 
+AUTHORIZED_USERS = {806806527192334356}
+
+# --- Async git helper ---
+async def async_git_run(args, password=None):
+    env = os.environ.copy()
+    script_path = None
+    if password:
+        # Temporary script that echoes the password
+        with tempfile.NamedTemporaryFile(mode="w", delete=False) as f:
+            f.write(f'#!/bin/sh\necho "{password}"\n')
+            script_path = f.name
+        os.chmod(script_path, 0o700)
+        env["GIT_ASKPASS"] = script_path
+
+    try:
+        result = await asyncio.to_thread(
+            subprocess.run,
+            args,
+            {"check": True, "capture_output": True, "text": True, "env": env}
+        )
+        return result.stdout
+    finally:
+        if script_path:
+            os.remove(script_path)
+
+# --- Modal for password input ---
+class GitPasswordModal(ui.Modal, title="Git Password / Token"):
+    password = ui.TextInput(label="Password or Token", required=True)
+
+    def __init__(self, interaction, force: bool):
+        super().__init__()
+        self.interaction = interaction
+        self.force = force
+
+    async def on_submit(self, interaction):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            await async_git_run(["git", "fetch"], self.password.value)
+            current_commit = (await async_git_run(["git", "rev-parse", "HEAD"], self.password.value)).strip()
+            remote_commit = (await async_git_run(["git", "rev-parse", "origin/main"], self.password.value)).strip()
+
+            if not self.force and current_commit == remote_commit:
+                await interaction.followup.send("✅ Already up to date.", ephemeral=True)
+                return
+
+            if self.force:
+                await async_git_run(["git", "reset", "--hard", "origin/main"], self.password.value)
+                action_text = "Force-updated repository to latest commit."
+            else:
+                await async_git_run(["git", "pull"], self.password.value)
+                action_text = "Updated repository to latest commit."
+
+            await interaction.followup.send(f"✅ {action_text}\nRestarting...", ephemeral=True)
+
+            python_exec = sys.executable
+            os.execv(python_exec, [python_exec, "app.py"])
+
+        except subprocess.CalledProcessError as e:
+            await interaction.followup.send(f"❌ Git operation failed:\n```\n{e}\n```", ephemeral=True)
+        except Exception as e:
+            await interaction.followup.send(f"❌ Unexpected error:\n```\n{e}\n```", ephemeral=True)
+
+# --- Slash command ---
 @bot.tree.command(name="gitupdate", description="Update the bot from the latest Git commit and restart")
 @app_commands.describe(force="Force update even if already up to date")
 async def gitupdate(interaction: discord.Interaction, force: bool = False):
@@ -326,38 +390,9 @@ async def gitupdate(interaction: discord.Interaction, force: bool = False):
         await interaction.response.send_message("❌ You are not authorized to use this command.", ephemeral=True)
         return
 
-    await interaction.response.send_message("🔄 Checking repository for updates...", ephemeral=True)
-
-    try:
-        # Fetch latest info from origin
-        subprocess.run(["git", "fetch"], check=True)
-
-        # Get current and latest commit hashes
-        current_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-        remote_commit = subprocess.check_output(["git", "rev-parse", "origin/main"], text=True).strip()
-
-        if not force and current_commit == remote_commit:
-            await interaction.followup.send("✅ Already up to date. No update required.", ephemeral=True)
-            return
-
-        # Pull latest changes (forced if requested)
-        if force:
-            subprocess.run(["git", "reset", "--hard", "origin/main"], check=True)
-            action_text = "Force-updated repository to latest commit."
-        else:
-            subprocess.run(["git", "pull"], check=True)
-            action_text = "Updated repository to latest commit."
-
-        await interaction.followup.send(f"✅ {action_text}\nRestarting application...", ephemeral=True)
-
-        # Restart app.py
-        python_exec = sys.executable
-        os.execv(python_exec, [python_exec, "app.py"])
-
-    except subprocess.CalledProcessError as e:
-        await interaction.followup.send(f"❌ Git operation failed:\n```\n{e}\n```", ephemeral=True)
-    except Exception as e:
-        await interaction.followup.send(f"❌ Unexpected error:\n```\n{e}\n```", ephemeral=True)
+    # Open modal for password input
+    modal = GitPasswordModal(interaction, force)
+    await interaction.response.send_modal(modal)
 
 @bot.tree.command(name="stats", description="Displays stats of the bot(For admins)")
 @is_admin()
