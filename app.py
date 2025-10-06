@@ -404,15 +404,17 @@ async def on_ready():
             print(f"Failed to DM owner: {e}")
 
 
-# --- Slash command ---
-from discord import app_commands, ui, Interaction, Embed
+from discord.ext import commands
+from discord import Embed, ui
 
-@bot.tree.command(name="stats", description="Displays stats of the bot (For admins)")
-async def stats(interaction: Interaction):
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("❌ You must be an admin to use this command.", ephemeral=True)
-        return
+bot = commands.Bot(command_prefix="-cmd ")
 
+# Make sure your debug stats dict exists
+# debug_global_stats = {"versions": {...}, "guilds": {...}, "messages": [...]}
+
+@bot.command(name="stats")
+@commands.has_permissions(administrator=True)
+async def stats(ctx):
     main_embed = Embed(
         title="Global bot stats",
         description=f"The bot is in {len(debug_global_stats['guilds'])} guilds.\nClick a button for more info."
@@ -420,19 +422,19 @@ async def stats(interaction: Interaction):
     view = ui.View()
 
     # --- Callback functions ---
-    async def ver_callback(interaction: Interaction):
+    async def ver_callback(interaction):
         embed = Embed(title="Versions", description="Users by version")
         for version, count in debug_global_stats["versions"].items():
             embed.add_field(name="\u200b", value=f"{version}: {count}")
         await interaction.response.edit_message(embed=embed, view=view)
 
-    async def guilds_callback(interaction: Interaction):
+    async def guilds_callback(interaction):
         embed = Embed(title="Guilds", description="Guilds using the bot")
         for guild_id, name in debug_global_stats["guilds"].items():
             embed.add_field(name="\u200b", value=f"{name} ({guild_id})")
         await interaction.response.edit_message(embed=embed, view=view)
 
-    async def messages_callback(interaction: Interaction):
+    async def messages_callback(interaction):
         embed = Embed(title="Daily messages")
         for entry in debug_global_stats["messages"]:
             output_number = 0
@@ -457,7 +459,7 @@ async def stats(interaction: Interaction):
     view.add_item(btn_guilds)
     view.add_item(btn_messages)
 
-    await interaction.response.send_message(embed=main_embed, view=view)
+    await ctx.send(embed=main_embed, view=view)
 
 @bot.tree.command(name="link", description="Link a channel to a Minecraft server")
 @is_admin()
