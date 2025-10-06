@@ -382,6 +382,14 @@ class GitPasswordModal(ui.Modal, title="Git Password / Token"):
         except Exception as e:
             await interaction.followup.send(f"❌ Unexpected error:\n```\n{e}\n```", ephemeral=True)
 
+# --- Make sure to sync commands ---
+@bot.event
+async def on_ready():
+    print(f"[ready] Logged in as {bot.user}")
+    # Sync commands to your guild (replace with your guild ID for testing)
+    guild_id = 123456789012345678  # <-- your guild ID here
+    await bot.tree.sync(guild=discord.Object(id=guild_id))
+
 # --- Slash command ---
 from discord import app_commands, ui, Interaction, Embed
 
@@ -436,14 +444,6 @@ async def stats(interaction: Interaction):
     view.add_item(btn_messages)
 
     await interaction.response.send_message(embed=main_embed, view=view)
-
-# --- Make sure to sync commands ---
-@bot.event
-async def on_ready():
-    print(f"[ready] Logged in as {bot.user}")
-    # Sync commands to your guild (replace with your guild ID for testing)
-    guild_id = 123456789012345678  # <-- your guild ID here
-    await bot.tree.sync(guild=discord.Object(id=guild_id))
 
 @bot.tree.command(name="link", description="Link a channel to a Minecraft server")
 @is_admin()
