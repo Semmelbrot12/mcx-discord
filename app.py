@@ -909,7 +909,7 @@ async def broadcast(interaction: discord.Interaction, header: str, message: str)
         except:
             pass
             
-bot.start_time = datetime.datetime.utcnow()
+bot.start_time = datetime.utcnow()
 
 @bot.tree.command(name="stats", description="Show server and bot statistics")
 async def stats(interaction: discord.Interaction):
