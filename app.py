@@ -940,8 +940,20 @@ from collections import Counter
 import matplotlib.pyplot as plt
 from datetime import datetime
 
+import json
+import aiohttp
+import mysql.connector
+import asyncio
+from io import BytesIO
+from collections import Counter
+import matplotlib.pyplot as plt
+from datetime import datetime
+
 @bot.tree.command(name="stats", description="Show bot usage statistics with charts")
 async def stats(interaction: discord.Interaction):
+    # --- Defer the interaction so Discord doesn't timeout ---
+    await interaction.response.defer()
+
     # --- Load DB config ---
     with open("db_config.json", "r") as f:
         db_config = json.load(f)
@@ -1004,7 +1016,7 @@ async def stats(interaction: discord.Interaction):
     plt.close()
     files.append(discord.File(buf_sizes, filename="sizes.png"))
 
-    # --- Fetch plugin versions via HTTP ---
+    # --- Fetch plugin versions concurrently via HTTP ---
     bot.server_versions = {}
     connection = mysql.connector.connect(
         host=db_config["host"],
@@ -1019,19 +1031,22 @@ async def stats(interaction: discord.Interaction):
     cursor.close()
     connection.close()
 
+    async def fetch_version(session, guild_id, mc_ip):
+        ip, port = mc_ip.split(":")
+        url = f"http://{ip}:{port}/version"
+        try:
+            async with session.get(url, timeout=5) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    bot.server_versions[guild_id] = data.get("version", "Unknown")
+                else:
+                    bot.server_versions[guild_id] = "Unknown"
+        except Exception:
+            bot.server_versions[guild_id] = "Unknown"
+
     async with aiohttp.ClientSession() as session:
-        for guild_id, mc_ip in rows:
-            ip, port = mc_ip.split(":")
-            url = f"http://{ip}:{port}/version"
-            try:
-                async with session.get(url, timeout=5) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        bot.server_versions[guild_id] = data.get("version", "Unknown")
-                    else:
-                        bot.server_versions[guild_id] = "Unknown"
-            except Exception:
-                bot.server_versions[guild_id] = "Unknown"
+        tasks = [fetch_version(session, guild_id, mc_ip) for guild_id, mc_ip in rows]
+        await asyncio.gather(*tasks)
 
     # --- Plugin versions pie chart ---
     if bot.server_versions:
@@ -1045,8 +1060,8 @@ async def stats(interaction: discord.Interaction):
         plt.close()
         files.append(discord.File(buf_versions, filename="versions.png"))
 
-    await interaction.response.send_message(embed=embed, files=files)
-
+    # --- Send the final embed with files ---
+    await interaction.followup.send(embed=embed, files=files)
 
 @bot.tree.command(name="debug", description="Send a test debug message to a linked channel by DB ID")
 @app_commands.describe(row_id="The ID from the MCxDISCORD table")
