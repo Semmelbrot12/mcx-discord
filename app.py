@@ -921,7 +921,7 @@ async def stats(interaction: discord.Interaction):
     total_members = guild.member_count
     online_members = sum(1 for m in guild.members if m.status != discord.Status.offline)
 
-    uptime = datetime.datetime.utcnow() - bot.start_time
+    uptime = datetime.utcnow() - bot.start_time
     uptime_str = str(uptime).split(".")[0]  # remove microseconds
 
     embed = discord.Embed(title=f"{guild.name} Stats", color=discord.Color.blue())
