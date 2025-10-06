@@ -935,7 +935,7 @@ async def on_message(message):
 @bot.tree.command(name="stats", description="Show bot usage statistics")
 async def stats(interaction: discord.Interaction):
     # --- Text stats ---
-    uptime = datetime.datetime.utcnow() - bot.start_time
+    uptime = datetime.utcnow() - bot.start_time
     uptime_str = str(uptime).split(".")[0]
 
     total_guilds = len(bot.guilds)
