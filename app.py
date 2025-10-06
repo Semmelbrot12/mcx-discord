@@ -278,6 +278,47 @@ async def version_checker():
     except Exception as e:
         print(f"[version_checker] Error in loop: {e}")
 
+AUTHORIZED_USERS = {806806527192334356}  # only these users can use /gitupdate
+
+@bot.tree.command(name="gitupdate", description="Update the bot from the latest Git commit and restart")
+@app_commands.describe(force="Force update even if already up to date")
+async def gitupdate(interaction: discord.Interaction, force: bool = False):
+    if interaction.user.id not in AUTHORIZED_USERS:
+        await interaction.response.send_message("❌ You are not authorized to use this command.", ephemeral=True)
+        return
+
+    await interaction.response.send_message("🔄 Checking repository for updates...", ephemeral=True)
+
+    try:
+        # Fetch latest info from origin
+        subprocess.run(["git", "fetch"], check=True)
+
+        # Get current and latest commit hashes
+        current_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+        remote_commit = subprocess.check_output(["git", "rev-parse", "origin/main"], text=True).strip()
+
+        if not force and current_commit == remote_commit:
+            await interaction.followup.send("✅ Already up to date. No update required.", ephemeral=True)
+            return
+
+        # Pull latest changes (forced if requested)
+        if force:
+            subprocess.run(["git", "reset", "--hard", "origin/main"], check=True)
+            action_text = "Force-updated repository to latest commit."
+        else:
+            subprocess.run(["git", "pull"], check=True)
+            action_text = "Updated repository to latest commit."
+
+        await interaction.followup.send(f"✅ {action_text}\nRestarting application...", ephemeral=True)
+
+        # Restart app.py
+        python_exec = sys.executable
+        os.execv(python_exec, [python_exec, "app.py"])
+
+    except subprocess.CalledProcessError as e:
+        await interaction.followup.send(f"❌ Git operation failed:\n```\n{e}\n```", ephemeral=True)
+    except Exception as e:
+        await interaction.followup.send(f"❌ Unexpected error:\n```\n{e}\n```", ephemeral=True)
 
 @bot.tree.command(name="link", description="Link a channel to a Minecraft server")
 @is_admin()
