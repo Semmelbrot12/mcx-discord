@@ -405,13 +405,19 @@ async def on_ready():
 
 
 from discord.ext import commands
-from discord import Embed, ui
+from discord import Embed, ui, ButtonStyle, Interaction
+import discord
 
-bot = commands.Bot(command_prefix="-cmd ")
+intents = discord.Intents.default()
+intents.guilds = True
+intents.messages = True
+intents.message_content = True
 
-# Make sure your debug stats dict exists
-# debug_global_stats = {"versions": {...}, "guilds": {...}, "messages": [...]}
+bot = commands.Bot(command_prefix="-cmd ", intents=intents)
 
+# -------------------
+# Prefix command only
+# -------------------
 @bot.command(name="stats")
 @commands.has_permissions(administrator=True)
 async def stats(ctx):
@@ -421,23 +427,21 @@ async def stats(ctx):
     )
     view = ui.View()
 
-    # --- Callback functions ---
-    async def ver_callback(interaction):
+    async def ver_callback(interaction: Interaction):
         embed = Embed(title="Versions", description="Users by version")
         for version, count in debug_global_stats["versions"].items():
             embed.add_field(name="\u200b", value=f"{version}: {count}")
         await interaction.response.edit_message(embed=embed, view=view)
 
-    async def guilds_callback(interaction):
+    async def guilds_callback(interaction: Interaction):
         embed = Embed(title="Guilds", description="Guilds using the bot")
         for guild_id, name in debug_global_stats["guilds"].items():
             embed.add_field(name="\u200b", value=f"{name} ({guild_id})")
         await interaction.response.edit_message(embed=embed, view=view)
 
-    async def messages_callback(interaction):
+    async def messages_callback(interaction: Interaction):
         embed = Embed(title="Daily messages")
         for entry in debug_global_stats["messages"]:
-            output_number = 0
             if len(entry[2]) == 1:
                 output_number = entry[2][0]
             elif len(entry[2]) == 0:
@@ -447,12 +451,11 @@ async def stats(ctx):
             embed.add_field(name="\u200b", value=f"{entry[0]}: {output_number}")
         await interaction.response.edit_message(embed=embed, view=view)
 
-    # --- Buttons ---
-    btn_versions = ui.Button(label="Versions", style=discord.ButtonStyle.primary)
+    btn_versions = ui.Button(label="Versions", style=ButtonStyle.primary)
     btn_versions.callback = ver_callback
-    btn_guilds = ui.Button(label="Guilds", style=discord.ButtonStyle.primary)
+    btn_guilds = ui.Button(label="Guilds", style=ButtonStyle.primary)
     btn_guilds.callback = guilds_callback
-    btn_messages = ui.Button(label="Messages", style=discord.ButtonStyle.primary)
+    btn_messages = ui.Button(label="Messages", style=ButtonStyle.primary)
     btn_messages.callback = messages_callback
 
     view.add_item(btn_versions)
