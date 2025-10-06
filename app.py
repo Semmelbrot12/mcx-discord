@@ -908,30 +908,79 @@ async def broadcast(interaction: discord.Interaction, header: str, message: str)
             await interaction.response.send_message("❌ An error occurred during broadcast.", ephemeral=True)
         except:
             pass
-            
+        
+
+import matplotlib.pyplot as plt
+from io import BytesIO
+from collections import Counter
+
+
+# Assuming your bot tracks these
+bot.messages_seen = {}        # {guild_id: message_count}
+bot.server_versions = {}      # {guild_id: "1.21.1", ...}
 bot.start_time = datetime.utcnow()
 
-@bot.tree.command(name="stats", description="Show server and bot statistics")
-async def stats(interaction: discord.Interaction):
-    guild = interaction.guild
-    if guild is None:
-        await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+@bot.event
+async def on_message(message):
+    if message.author.bot:
         return
+    guild_id = message.guild.id if message.guild else None
+    if guild_id:
+        bot.messages_seen[guild_id] = bot.messages_seen.get(guild_id, 0) + 1
+        # Example: fetch version from /version endpoint if not cached
+        if guild_id not in bot.server_versions:
+            bot.server_versions[guild_id] = "1.21.1"  # placeholder
+    await bot.process_commands(message)
 
-    total_members = guild.member_count
-    online_members = sum(1 for m in guild.members if m.status != discord.Status.offline)
+@bot.tree.command(name="stats", description="Show bot usage statistics")
+async def stats(interaction: discord.Interaction):
+    # --- Text stats ---
+    uptime = datetime.datetime.utcnow() - bot.start_time
+    uptime_str = str(uptime).split(".")[0]
 
-    uptime = datetime.utcnow() - bot.start_time
-    uptime_str = str(uptime).split(".")[0]  # remove microseconds
+    total_guilds = len(bot.guilds)
+    total_members = sum(g.member_count for g in bot.guilds)
+    total_messages = sum(bot.messages_seen.values())
 
-    embed = discord.Embed(title=f"{guild.name} Stats", color=discord.Color.blue())
-    embed.add_field(name="Total Members", value=total_members)
-    embed.add_field(name="Online Members", value=online_members)
-    embed.add_field(name="Server Created", value=guild.created_at.strftime("%Y-%m-%d"))
-    embed.add_field(name="Bot Uptime", value=uptime_str)
-    embed.set_thumbnail(url=guild.icon.url if guild.icon else None)
+    embed = discord.Embed(title="🤖 Bot Stats", color=discord.Color.green())
+    embed.add_field(name="Uptime", value=uptime_str, inline=True)
+    embed.add_field(name="Servers", value=total_guilds, inline=True)
+    embed.add_field(name="Total Users", value=total_members, inline=True)
+    embed.add_field(name="Total Messages Seen", value=total_messages, inline=True)
 
-    await interaction.response.send_message(embed=embed)
+    files = []
+
+    # --- Messages per server bar chart ---
+    if bot.messages_seen:
+        guild_names = [bot.get_guild(gid).name for gid in bot.messages_seen.keys()]
+        message_counts = [bot.messages_seen[gid] for gid in bot.messages_seen.keys()]
+
+        plt.figure(figsize=(8, 4))
+        plt.barh(guild_names, message_counts, color='skyblue')
+        plt.xlabel("Messages")
+        plt.title("Messages per Server")
+        buf_messages = BytesIO()
+        plt.tight_layout()
+        plt.savefig(buf_messages, format='png')
+        buf_messages.seek(0)
+        plt.close()
+        files.append(discord.File(buf_messages, filename="messages.png"))
+        embed.set_image(url="attachment://messages.png")
+
+    # --- Server versions pie chart ---
+    if bot.server_versions:
+        version_counter = Counter(bot.server_versions.values())
+        plt.figure(figsize=(6, 6))
+        plt.pie(version_counter.values(), labels=version_counter.keys(), autopct='%1.1f%%', startangle=140)
+        plt.title("Server Versions Distribution")
+        buf_versions = BytesIO()
+        plt.savefig(buf_versions, format='png')
+        buf_versions.seek(0)
+        plt.close()
+        files.append(discord.File(buf_versions, filename="versions.png"))
+        embed.set_thumbnail(url="attachment://versions.png")
+
+    await interaction.response.send_message(embed=embed, files=files)
 
 @bot.tree.command(name="debug", description="Send a test debug message to a linked channel by DB ID")
 @app_commands.describe(row_id="The ID from the MCxDISCORD table")
