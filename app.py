@@ -679,11 +679,39 @@ async def manage(interaction: discord.Interaction):
             save_ptr_cache()
 
         # Hetzner / FreeMcServer.net detection
-        if "hetzner" in ptr:
+        review_button = None
+        if "hetzner" in ptr or "freemcserver" in ptr:
             warning_msg = (
-                "⚠️ We suspect this server is hosted on Hetzner/FreeMcServer.net, "
-                "and the remote console may be limited."
+                "⚠️ An automated check suspects that this server is hosted on FreeMcServer.net. "
+                " Therefore, the /manage command has been disabled." 
+                "If you are **not** using FreeMcServer.Net, please click the button below."
+                
             )
+
+            class ReviewButton(discord.ui.View):
+                def __init__(self):
+                    super().__init__(timeout=None)
+
+                @discord.ui.button(label="I am not using FreeMcServer.net", style=discord.ButtonStyle.red, emoji="🚫")
+                async def confirm(self, interaction_btn: discord.Interaction, button: discord.ui.Button):
+                    log_channel = interaction.client.get_channel(REVIEW_LOG_CHANNEL_ID)
+                    if log_channel:
+                        embed = discord.Embed(
+                            title="🕵️ Host Review Requested",
+                            color=0xe67e22
+                        )
+                        embed.add_field(name="Guild", value=f"{interaction.guild.name} (`{interaction.guild_id}`)", inline=False)
+                        embed.add_field(name="Channel", value=f"<#{interaction.channel.id}> (`{interaction.channel.id}`)", inline=False)
+                        embed.add_field(name="Server IP", value=f"{host}:{port}", inline=False)
+                        embed.set_footer(text=f"Requested by {interaction.user} ({interaction.user.id})")
+                        await log_channel.send(embed=embed)
+
+                    await interaction_btn.response.send_message(
+                        "✅ Thank you. We will review this as soon as possible, usually no longer than 24 hours.",
+                        ephemeral=True
+                    )
+
+            review_button = ReviewButton()
 
         # Send main GUI
         view = ManageView(host, port, token)
@@ -694,7 +722,11 @@ async def manage(interaction: discord.Interaction):
         )
         if warning_msg:
             embed.add_field(name="Notice", value=warning_msg, inline=False)
-        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+
+        if review_button:
+            await interaction.followup.send(embed=embed, view=review_button, ephemeral=True)
+        else:
+            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
     except Exception as e:
         print(f"[manage] Command error: {e}")
