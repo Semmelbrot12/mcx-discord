@@ -383,34 +383,35 @@ class GitPasswordModal(ui.Modal, title="Git Password / Token"):
             await interaction.followup.send(f"❌ Unexpected error:\n```\n{e}\n```", ephemeral=True)
 
 # --- Slash command ---
-@bot.tree.command(name="gitupdate", description="Update the bot from the latest Git commit and restart")
-@app_commands.describe(force="Force update even if already up to date")
-async def gitupdate(interaction: discord.Interaction, force: bool = False):
-    if interaction.user.id not in AUTHORIZED_USERS:
-        await interaction.response.send_message("❌ You are not authorized to use this command.", ephemeral=True)
+from discord import app_commands, ui, Interaction, Embed
+
+@bot.tree.command(name="stats", description="Displays stats of the bot (For admins)")
+async def stats(interaction: Interaction):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ You must be an admin to use this command.", ephemeral=True)
         return
 
-    # Open modal for password input
-    modal = GitPasswordModal(interaction, force)
-    await interaction.response.send_modal(modal)
+    main_embed = Embed(
+        title="Global bot stats",
+        description=f"The bot is in {len(debug_global_stats['guilds'])} guilds.\nClick a button for more info."
+    )
+    view = ui.View()
 
-@bot.tree.command(name="stats", description="Displays stats of the bot(For admins)")
-@is_admin()
-async def stats(interaction: discord.Interaction):
-    async def ver_callback(interaction: discord.Interaction):
-        versions = discord.Embed(title="Versions", description="How many users are using those versions")
-        for entry in debug_global_stats["versions"].items():
-            versions.add_field(name="\r", value=f"{entry[0]}: {entry[1]}")
-        await interaction.followup.edit_message(embed=versions, view=view1)
-    
-    async def guilds_callback(interaction: discord.Interaction):
-        guilds = discord.Embed(title="Guilds", description="What guilds is using this bot")
-        for entry in debug_global_stats["guilds"].items():
-            guilds.add_field(name="\r", value=f"{entry[1]}({entry[0]})")
-        await interaction.followup.edit_message(embed=guilds)
+    # --- Callback functions ---
+    async def ver_callback(interaction: Interaction):
+        embed = Embed(title="Versions", description="Users by version")
+        for version, count in debug_global_stats["versions"].items():
+            embed.add_field(name="\u200b", value=f"{version}: {count}")
+        await interaction.response.edit_message(embed=embed, view=view)
 
-    async def messages_callback(interaction: discord.Interaction):
-        messages = discord.Embed(title="Daily messages")
+    async def guilds_callback(interaction: Interaction):
+        embed = Embed(title="Guilds", description="Guilds using the bot")
+        for guild_id, name in debug_global_stats["guilds"].items():
+            embed.add_field(name="\u200b", value=f"{name} ({guild_id})")
+        await interaction.response.edit_message(embed=embed, view=view)
+
+    async def messages_callback(interaction: Interaction):
+        embed = Embed(title="Daily messages")
         for entry in debug_global_stats["messages"]:
             output_number = 0
             if len(entry[2]) == 1:
@@ -418,26 +419,31 @@ async def stats(interaction: discord.Interaction):
             elif len(entry[2]) == 0:
                 output_number = entry[1]
             else:
-                output_number = (sum(entry[2])) / len(entry[2])
-            messages.add_field(name="\r", value=f"{entry[0]}: {output_number}")
-            
-    main: discord.Embed = discord.Embed(title="Global bot stats", description=f"The amount of guilds this bot is being used in is {len(debug_global_stats['guilds'])}.\nClick any of the buttons for more data")
+                output_number = sum(entry[2]) / len(entry[2])
+            embed.add_field(name="\u200b", value=f"{entry[0]}: {output_number}")
+        await interaction.response.edit_message(embed=embed, view=view)
 
-    view1 = discord.ui.View()
+    # --- Buttons ---
+    btn_versions = ui.Button(label="Versions", style=discord.ButtonStyle.primary)
+    btn_versions.callback = ver_callback
+    btn_guilds = ui.Button(label="Guilds", style=discord.ButtonStyle.primary)
+    btn_guilds.callback = guilds_callback
+    btn_messages = ui.Button(label="Messages", style=discord.ButtonStyle.primary)
+    btn_messages.callback = messages_callback
 
-    vers = discord.ui.Button(label="Versions")
-    guild_count = discord.ui.Button(label="Guilds")
-    msgs = discord.ui.Button(label="Messages")
+    view.add_item(btn_versions)
+    view.add_item(btn_guilds)
+    view.add_item(btn_messages)
 
-    vers.callback = ver_callback(interaction)
-    guild_count.callback = guilds_callback(interaction)
-    msgs.callback = messages_callback(interaction)
+    await interaction.response.send_message(embed=main_embed, view=view)
 
-    view1.add_item(vers)
-    view1.add_item(guild_count)
-    view1.add_item(msgs)
-
-    await interaction.response.send_message(embed=main, view=view1)
+# --- Make sure to sync commands ---
+@bot.event
+async def on_ready():
+    print(f"[ready] Logged in as {bot.user}")
+    # Sync commands to your guild (replace with your guild ID for testing)
+    guild_id = 123456789012345678  # <-- your guild ID here
+    await bot.tree.sync(guild=discord.Object(id=guild_id))
 
 @bot.tree.command(name="link", description="Link a channel to a Minecraft server")
 @is_admin()
