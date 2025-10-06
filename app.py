@@ -932,10 +932,10 @@ async def on_message(message):
             bot.server_versions[guild_id] = "1.21.1"  # placeholder
     await bot.process_commands(message)
 
+import aiohttp
 import mysql.connector
-from mcstatus import JavaServer
-from collections import Counter
 from io import BytesIO
+from collections import Counter
 import matplotlib.pyplot as plt
 from datetime import datetime
 
@@ -999,37 +999,36 @@ async def stats(interaction: discord.Interaction):
     plt.close()
     files.append(discord.File(buf_sizes, filename="sizes.png"))
 
-    # --- Fetch versions from MySQL via mysql.connector ---
+    # --- Fetch plugin versions via HTTP ---
     bot.server_versions = {}
-    connection = mysql.connector.connect(
-        host="HOST",
-        user="USER",
-        password="PASS",
-        database="DB"
-    )
+    connection = mysql.connector.connect(host="HOST", user="USER", password="PASS", database="DB")
+    cursor = connection.cursor()
+    cursor.execute("SELECT guild_id, mc_ip FROM servers")
+    rows = cursor.fetchall()
+    cursor.close()
+    connection.close()
 
-    try:
-        cursor = connection.cursor()
-        cursor.execute("SELECT guild_id, mc_ip FROM servers")
-        for guild_id, mc_ip in cursor.fetchall():
+    async with aiohttp.ClientSession() as session:
+        for guild_id, mc_ip in rows:
             ip, port = mc_ip.split(":")
-            port = int(port)
+            url = f"http://{ip}:{port}/version"
             try:
-                server = JavaServer(ip, port)
-                status = server.status()
-                bot.server_versions[guild_id] = status.version.name
+                async with session.get(url, timeout=5) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        # Use whatever result the server returns as the version
+                        bot.server_versions[guild_id] = data.get("version", "Unknown")
+                    else:
+                        bot.server_versions[guild_id] = "Unknown"
             except Exception:
                 bot.server_versions[guild_id] = "Unknown"
-    finally:
-        cursor.close()
-        connection.close()
 
-    # --- Server versions pie chart ---
+    # --- Plugin versions pie chart ---
     if bot.server_versions:
         version_counter = Counter(bot.server_versions.values())
         plt.figure(figsize=(6,6))
         plt.pie(version_counter.values(), labels=version_counter.keys(), autopct='%1.1f%%', startangle=140)
-        plt.title("Server Versions Distribution")
+        plt.title("Plugin Versions Distribution")
         buf_versions = BytesIO()
         plt.savefig(buf_versions, format='png')
         buf_versions.seek(0)
