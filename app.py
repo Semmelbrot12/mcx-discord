@@ -920,16 +920,60 @@ bot.messages_seen = {}        # {guild_id: message_count}
 bot.server_versions = {}      # {guild_id: "1.21.1", ...}
 bot.start_time = datetime.utcnow()
 
+import json
+import os
+import asyncio
+
+MESSAGE_COUNT_FILE = "message_counts.json"
+
+def load_message_counts():
+    if os.path.exists(MESSAGE_COUNT_FILE):
+        with open(MESSAGE_COUNT_FILE, "r") as f:
+            return json.load(f)
+    return {}
+
+async def save_message_counts_periodically():
+    while True:
+        try:
+            with open(MESSAGE_COUNT_FILE, "w") as f:
+                json.dump(bot.messages_seen, f)
+        except Exception as e:
+            print(f"Error saving message counts: {e}")
+        await asyncio.sleep(60)  # save every 60 seconds
+
+@bot.event
+async def on_ready():
+    # Load message counts from file
+    bot.messages_seen = load_message_counts()
+
+    # Start background autosave task
+    bot.loop.create_task(save_message_counts_periodically())
+    print("Message counts loaded and autosave started.")
+
 @bot.event
 async def on_message(message):
-    if message.author.bot:
+    # Ignore system messages
+    if not message.guild or not message.channel:
         return
-    guild_id = message.guild.id if message.guild else None
-    if guild_id:
+
+    # Skip bots unless it's the Minecraft bridge webhook
+    if message.webhook_id:
+        webhook_name = None
+        try:
+            webhook = await message.channel.fetch_webhook(message.webhook_id)
+            webhook_name = webhook.name
+        except Exception:
+            pass
+        if webhook_name != "MC×Disc Link":
+            return
+    elif message.author.bot:
+        return
+
+    # Only count messages from linked channels
+    if getattr(bot, "linked_channels", None) and message.channel.id in bot.linked_channels:
+        guild_id = str(message.guild.id)
         bot.messages_seen[guild_id] = bot.messages_seen.get(guild_id, 0) + 1
-        # Example: fetch version from /version endpoint if not cached
-        if guild_id not in bot.server_versions:
-            bot.server_versions[guild_id] = "1.21.1"  # placeholder
+
     await bot.process_commands(message)
 
 import json
