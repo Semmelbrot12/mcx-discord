@@ -50,7 +50,7 @@ intents.guilds = True
 intents.messages = True
 intents.message_content = True
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = commands.Bot(command_prefix="/", intents=intents)
 
 GLOBAL_DATA_FILE = "global_data.json"
 DB_CONFIG_FILE = "db_config.json"
