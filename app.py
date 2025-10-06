@@ -932,8 +932,14 @@ async def on_message(message):
             bot.server_versions[guild_id] = "1.21.1"  # placeholder
     await bot.process_commands(message)
 
-@bot.tree.command(name="stats", description="Show bot usage statistics")
+@bot.tree.command(name="stats", description="Show bot usage statistics with charts")
 async def stats(interaction: discord.Interaction):
+    from io import BytesIO
+    import matplotlib.pyplot as plt
+    from collections import Counter
+    import pymysql
+    from mcstatus import JavaServer
+
     # --- Text stats ---
     uptime = datetime.utcnow() - bot.start_time
     uptime_str = str(uptime).split(".")[0]
@@ -942,11 +948,37 @@ async def stats(interaction: discord.Interaction):
     total_members = sum(g.member_count for g in bot.guilds)
     total_messages = sum(bot.messages_seen.values())
 
+    # --- Server size breakdown ---
+    size_counts = {
+        "<50": 0,
+        "<250": 0,
+        "<500": 0,
+        "<2500": 0,
+        "2500+": 0
+    }
+    for g in bot.guilds:
+        m = g.member_count
+        if m < 50:
+            size_counts["<50"] += 1
+        elif m < 250:
+            size_counts["<250"] += 1
+        elif m < 500:
+            size_counts["<500"] += 1
+        elif m < 2500:
+            size_counts["<2500"] += 1
+        else:
+            size_counts["2500+"] += 1
+
     embed = discord.Embed(title="🤖 Bot Stats", color=discord.Color.green())
     embed.add_field(name="Uptime", value=uptime_str, inline=True)
     embed.add_field(name="Servers", value=total_guilds, inline=True)
     embed.add_field(name="Total Users", value=total_members, inline=True)
     embed.add_field(name="Total Messages Seen", value=total_messages, inline=True)
+    embed.add_field(
+        name="Server Size Breakdown",
+        value="\n".join(f"{k}: {v}" for k, v in size_counts.items()),
+        inline=False
+    )
 
     files = []
 
@@ -955,7 +987,7 @@ async def stats(interaction: discord.Interaction):
         guild_names = [bot.get_guild(gid).name for gid in bot.messages_seen.keys()]
         message_counts = [bot.messages_seen[gid] for gid in bot.messages_seen.keys()]
 
-        plt.figure(figsize=(8, 4))
+        plt.figure(figsize=(8, max(4, len(guild_names)*0.5)))
         plt.barh(guild_names, message_counts, color='skyblue')
         plt.xlabel("Messages")
         plt.title("Messages per Server")
@@ -967,7 +999,34 @@ async def stats(interaction: discord.Interaction):
         files.append(discord.File(buf_messages, filename="messages.png"))
         embed.set_image(url="attachment://messages.png")
 
-    # --- Server versions pie chart ---
+    # --- Server size pie chart ---
+    plt.figure(figsize=(6, 6))
+    plt.pie(size_counts.values(), labels=size_counts.keys(), autopct='%1.1f%%', startangle=140)
+    plt.title("Server Size Distribution")
+    buf_sizes = BytesIO()
+    plt.savefig(buf_sizes, format='png')
+    buf_sizes.seek(0)
+    plt.close()
+    files.append(discord.File(buf_sizes, filename="sizes.png"))
+
+    # --- Fetch versions from MySQL and generate pie chart ---
+    bot.server_versions = {}
+    connection = pymysql.connect(host="HOST", user="USER", password="PASS", database="DB")
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT guild_id, mc_ip FROM servers")
+            for guild_id, mc_ip in cursor.fetchall():
+                ip, port = mc_ip.split(":")
+                port = int(port)
+                try:
+                    server = JavaServer(ip, port)
+                    status = server.status()
+                    bot.server_versions[guild_id] = status.version.name
+                except Exception:
+                    bot.server_versions[guild_id] = "Unknown"
+    finally:
+        connection.close()
+
     if bot.server_versions:
         version_counter = Counter(bot.server_versions.values())
         plt.figure(figsize=(6, 6))
@@ -978,9 +1037,9 @@ async def stats(interaction: discord.Interaction):
         buf_versions.seek(0)
         plt.close()
         files.append(discord.File(buf_versions, filename="versions.png"))
-        embed.set_thumbnail(url="attachment://versions.png")
 
     await interaction.response.send_message(embed=embed, files=files)
+
 
 @bot.tree.command(name="debug", description="Send a test debug message to a linked channel by DB ID")
 @app_commands.describe(row_id="The ID from the MCxDISCORD table")
