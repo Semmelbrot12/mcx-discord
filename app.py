@@ -1107,37 +1107,46 @@ async def stats(interaction: discord.Interaction):
     # --- Send the final embed with files ---
     await interaction.followup.send(embed=embed, files=files)
 
-@bot.tree.command(name="gitupdate", description="Update the bot from GitHub and restart")
+###
+
+# List of allowed user IDs
+ALLOWED_IDS = [1121504039146889248, 806806527192334356]
+
+@bot.tree.command(name="gitupdate", description="Update the bot via SSH and restart")
 async def gitupdate(interaction: discord.Interaction):
-    allowed_ids = [1121504039146889248, 806806527192334356]
-    if interaction.user.id not in allowed_ids:
+    if interaction.user.id not in ALLOWED_IDS:
         return await interaction.response.send_message("❌ You are not authorized.", ephemeral=True)
 
-    await interaction.response.send_message("⬇️ Downloading updates...", ephemeral=True)
+    await interaction.response.defer(ephemeral=True)
 
     try:
-        # Fetch & reset
-        subprocess.run(["git", "fetch", "origin"], check=True)
-        subprocess.run(["git", "reset", "--hard", "origin/main"], check=True)
+        cwd = os.path.dirname(os.path.abspath(__file__))
 
-        # Get latest commit hash
-        version = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"]).decode().strip()
+        # Ensure SSH key is loaded in ssh-agent (adjust path if needed)
+        subprocess.run(["ssh-add", os.path.expanduser("~/.ssh/id_rsa")], check=True)
 
-        # Send embed in the channel where command was executed
+        # Pull latest changes via SSH
+        subprocess.run(["git", "fetch", "origin"], cwd=cwd, check=True)
+        subprocess.run(["git", "pull", "origin", "main"], cwd=cwd, check=True)
+
+        # Get current commit hash
+        version = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"], cwd=cwd
+        ).decode().strip()
+
         embed = discord.Embed(
             title="✅ Update complete! Restarting...",
             description=f"Running version `{version}`",
             color=0x00FF00
         )
-        await interaction.channel.send(embed=embed)
+        await interaction.followup.send(embed=embed)
 
-        # Restart the bot process
+        # Restart the bot
         os.execv(sys.executable, [sys.executable] + sys.argv)
 
-    except subprocess.CalledProcessError:
-        await interaction.channel.send("❌ Git update failed.")
-    except Exception as e:
-        await interaction.channel.send(f"❌ Unexpected error:\n```\n{e}\n```")
+    except subprocess.CalledProcessError as e:
+        await interaction.followup.send(f"❌ Git update failed:\n```\n{e}\n```")
+###
 
 @bot.tree.command(name="debug", description="Send a test debug message to a linked channel by DB ID")
 @app_commands.describe(row_id="The ID from the MCxDISCORD table")
