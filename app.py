@@ -6,7 +6,12 @@ import subprocess
 import asyncio
 import logging
 import json
-from datetime import datetime
+from datetime import time
+import aiohttp
+import mysql.connector
+from io import BytesIO
+from collections import Counter
+import matplotlib.pyplot as plt
 
 # Auto-install packages
 try:
@@ -146,12 +151,17 @@ async def update_presence():
 async def daily_calculator():
     raw_current_time = time.time()
     current_time = time.gmtime(raw_current_time)
-    required_time = datetime(0, 0, 0, hour=0, minute=0).time()
+    required_time = time(hour=0, minute=0)
+
 
     if required_time.minute == current_time.tm_min and required_time.hour == current_time.tm_hour:
         for cell in debug_global_stats["messages"]:
-            cell[2].append(cell[1]) # Adds counted messages from on_message event into the list
-            cell[1] = 0 # Resets the messages
+            try:
+                cell[2].append(cell[1]) # Adds counted messages from on_message event into the list
+                cell[1] = 0 # Resets the messages
+            except Exception as e:
+                print(f"[daily_calculator] Error processing message cell: {e}")
+
 
 
 @bot.event
@@ -883,9 +893,6 @@ bot.messages_seen = {}        # {guild_id: message_count}
 bot.server_versions = {}      # {guild_id: "1.21.1", ...}
 bot.start_time = datetime.utcnow()
 
-import json
-import os
-import asyncio
 
 MESSAGE_COUNT_FILE = "message_counts.json"
 
@@ -930,22 +937,7 @@ async def on_message(message):
 
     await bot.process_commands(message)
 
-import json
-import aiohttp
-import mysql.connector
-from io import BytesIO
-from collections import Counter
-import matplotlib.pyplot as plt
-from datetime import datetime
 
-import json
-import aiohttp
-import mysql.connector
-import asyncio
-from io import BytesIO
-from collections import Counter
-import matplotlib.pyplot as plt
-from datetime import datetime
 
 @bot.tree.command(name="stats", description="Show bot usage statistics with charts")
 async def stats(interaction: discord.Interaction):
@@ -1179,15 +1171,18 @@ async def debug(interaction: discord.Interaction, row_id: int):
 
 @bot.event
 async def on_message(message: discord.Message):
-    found = False
-    for cell in debug_global_stats["messages"]:
-        if cell[0] == message.guild.name:
-            found = True
-            cell[1] += 1
-    if not found:
-        debug_global_stats["messages"].append([message.guild.name, 0, []])
-
     try:
+        found = False
+        for cell in debug_global_stats["messages"]:
+            try:
+                if cell[0] == message.guild.name:
+                    found = True
+                    cell[1] += 1
+            except Exception as e:
+                print(f"[on_message] Error processing message cell: {e}")
+        if not found:
+            debug_global_stats["messages"].append([message.guild.name, 0, []])
+
         if message.author.bot or not message.guild:
             return
 
@@ -1221,6 +1216,7 @@ async def on_message(message: discord.Message):
                     print(f"[moderation] Chat forwarding error: {e}")
     except Exception as e:
         print(f"[on_message] Error: {e}")
+
 
 
 @bot.event
@@ -1297,37 +1293,55 @@ TOKEN_CHECKER = "token_checker.py"
 @bot.event
 async def on_ready():
     print(f"[ready] Logged in as {bot.user}")
-    
-    # Load global stats / message counts
+
+    global debug_global_stats
+
+    # Load global stats / message counts safely
     if os.path.exists(GLOBAL_DATA_FILE):
-        with open(GLOBAL_DATA_FILE, "r") as f:
-            global debug_global_stats
-            debug_global_stats = json.load(f)
+        try:
+            with open(GLOBAL_DATA_FILE, "r") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    # Merge loaded data with defaults
+                    debug_global_stats.update({
+                        "messages": data.get("messages", []),
+                        "versions": data.get("versions", {}),
+                        "guilds": data.get("guilds", [])
+                    })
+                else:
+                    print("[warning] Invalid data type in GLOBAL_DATA_FILE; resetting stats.")
+        except Exception as e:
+            print(f"[warning] Failed to load GLOBAL_DATA_FILE: {e}")
     else:
-        with open(GLOBAL_DATA_FILE, "w") as f:
-            json.dump(debug_global_stats, f)
-    
+        # Create the file if it doesn't exist
+        try:
+            with open(GLOBAL_DATA_FILE, "w") as f:
+                json.dump(debug_global_stats, f, indent=2)
+        except Exception as e:
+            print(f"[warning] Failed to create GLOBAL_DATA_FILE: {e}")
+
+    # Load per-bot message counts
     bot.messages_seen = load_message_counts()
     bot.loop.create_task(save_message_counts_periodically())
-    
-    # Sync commands
+
+    # Sync slash commands
     try:
         await bot.tree.sync()
         print("[ready] Slash commands synced!")
     except Exception as e:
         print(f"[ready] Failed to sync slash commands: {e}")
-    
-    # Start tasks
+
+    # Start background tasks
     version_checker.start()
     daily_calculator.start()
     await update_presence()
 
 
+# Run the bot
 if os.path.exists(TOKEN_FILE):
     with open(TOKEN_FILE, "r") as f:
         token = f.read().strip()
-    # run your bot with the token
     bot.run(token)
 else:
-    # if token.txt does not exist, start token_checker.py
+    # If token.txt does not exist, start token_checker.py
     subprocess.run(["python", TOKEN_CHECKER])
