@@ -152,7 +152,8 @@ async def update_presence():
 async def daily_calculator():
     raw_current_time = time.time()
     current_time = time.gmtime(raw_current_time)
-    required_time = time(hour=0, minute=0)
+    required_time = datetime.time(hour=0, minute=0)
+
 
 
     if required_time.minute == current_time.tm_min and required_time.hour == current_time.tm_hour:
