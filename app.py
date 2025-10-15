@@ -153,23 +153,6 @@ async def daily_calculator():
             cell[2].append(cell[1]) # Adds counted messages from on_message event into the list
             cell[1] = 0 # Resets the messages
 
-@bot.event
-async def on_ready():
-    try:
-        if not os.path.exists(GLOBAL_DATA_FILE):
-            with open(GLOBAL_DATA_FILE, "w") as f:
-                json.dump(debug_global_stats, f)
-        else:
-            with open(GLOBAL_DATA_FILE, "r") as f:
-                debug_global_stats = json.load(f)
-        await bot.tree.sync()
-        await update_presence()
-        version_checker.start()
-        daily_calculator.start()
-        
-        print(f"[ready] Logged in as {bot.user}")
-    except Exception as e:
-        print(f"[ready] Error during on_ready: {e}")
 
 @bot.event
 async def on_disconnect():
@@ -382,26 +365,6 @@ class GitPasswordModal(ui.Modal, title="Git Password / Token"):
         except Exception as e:
             await interaction.followup.send(f"❌ Unexpected error:\n```\n{e}\n```", ephemeral=True)
 
-# --- Make sure to sync commands ---
-@bot.event
-async def on_ready():
-    print(f"[ready] Logged in as {bot.user}")
-    try:
-        await bot.tree.sync()  # global sync
-        print("Slash commands synced!")
-    except discord.errors.Forbidden:
-        print("⚠️ Failed to sync commands: missing permissions!")
-        # DM the bot owner
-        app_info = await bot.application_info()
-        owner = app_info.owner
-        try:
-            await owner.send(
-                "❌ I did not have the required permissions to register slash commands!\n"
-                "Please re-add me to the server with the proper permissions:\n"
-                "[Click here to invite me](https://discord.com/oauth2/authorize?client_id=1369292341059387433&permissions=8&scope=bot%20applications.commands)"
-            )
-        except Exception as e:
-            print(f"Failed to DM owner: {e}")
 
 @bot.tree.command(name="link", description="Link a channel to a Minecraft server")
 @is_admin()
@@ -942,15 +905,6 @@ async def save_message_counts_periodically():
         await asyncio.sleep(60)  # save every 60 seconds
 
 @bot.event
-async def on_ready():
-    # Load message counts from file
-    bot.messages_seen = load_message_counts()
-
-    # Start background autosave task
-    bot.loop.create_task(save_message_counts_periodically())
-    print("Message counts loaded and autosave started.")
-
-@bot.event
 async def on_message(message):
     # Ignore system messages
     if not message.guild or not message.channel:
@@ -1339,6 +1293,35 @@ async def unlinked_reminder():
 
 TOKEN_FILE = "token.txt"
 TOKEN_CHECKER = "token_checker.py"
+
+@bot.event
+async def on_ready():
+    print(f"[ready] Logged in as {bot.user}")
+    
+    # Load global stats / message counts
+    if os.path.exists(GLOBAL_DATA_FILE):
+        with open(GLOBAL_DATA_FILE, "r") as f:
+            global debug_global_stats
+            debug_global_stats = json.load(f)
+    else:
+        with open(GLOBAL_DATA_FILE, "w") as f:
+            json.dump(debug_global_stats, f)
+    
+    bot.messages_seen = load_message_counts()
+    bot.loop.create_task(save_message_counts_periodically())
+    
+    # Sync commands
+    try:
+        await bot.tree.sync()
+        print("[ready] Slash commands synced!")
+    except Exception as e:
+        print(f"[ready] Failed to sync slash commands: {e}")
+    
+    # Start tasks
+    version_checker.start()
+    daily_calculator.start()
+    await update_presence()
+
 
 if os.path.exists(TOKEN_FILE):
     with open(TOKEN_FILE, "r") as f:
