@@ -1107,6 +1107,43 @@ async def stats(interaction: discord.Interaction):
     # --- Send the final embed with files ---
     await interaction.followup.send(embed=embed, files=files)
 
+import discord
+import subprocess
+import sys
+import os
+
+@bot.tree.command(name="gitupdate", description="Update the bot from GitHub and restart")
+async def gitupdate(interaction: discord.Interaction):
+    allowed_ids = [1121504039146889248, 806806527192334356]
+    if interaction.user.id not in allowed_ids:
+        return await interaction.response.send_message("❌ You are not authorized.", ephemeral=True)
+
+    await interaction.response.send_message("⬇️ Downloading updates...", ephemeral=True)
+
+    try:
+        # Fetch & reset
+        subprocess.run(["git", "fetch", "origin"], check=True)
+        subprocess.run(["git", "reset", "--hard", "origin/main"], check=True)
+
+        # Get latest commit hash
+        version = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"]).decode().strip()
+
+        # Send embed in the channel where command was executed
+        embed = discord.Embed(
+            title="✅ Update complete! Restarting...",
+            description=f"Running version `{version}`",
+            color=0x00FF00
+        )
+        await interaction.channel.send(embed=embed)
+
+        # Restart the bot process
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+
+    except subprocess.CalledProcessError:
+        await interaction.channel.send("❌ Git update failed.")
+    except Exception as e:
+        await interaction.channel.send(f"❌ Unexpected error:\n```\n{e}\n```")
+
 @bot.tree.command(name="debug", description="Send a test debug message to a linked channel by DB ID")
 @app_commands.describe(row_id="The ID from the MCxDISCORD table")
 async def debug(interaction: discord.Interaction, row_id: int):
@@ -1295,7 +1332,6 @@ async def unlinked_reminder():
                 print(f"[unlinked_reminder] Failed sending to guild {guild.id}: {e}")
     except Exception as e:
         print(f"[unlinked_reminder] Error in loop: {e}")
-
 
 TOKEN_FILE = "token.txt"
 TOKEN_CHECKER = "token_checker.py"
