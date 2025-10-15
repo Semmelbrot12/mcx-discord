@@ -1,0 +1,5 @@
+- [x] Fix ValueError in daily_calculator function by using time(hour=0, minute=0).
+- [x] Fix TypeError in on_message function by adding a try-except block within the loop.
+- [ ] Restart the bot after applying the changes.
+- [ ] Monitor the logs for any new errors.
+- [ ] Test the daily_calculator and on_message functions to ensure they work correctly.
