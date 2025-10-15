@@ -1107,11 +1107,6 @@ async def stats(interaction: discord.Interaction):
     # --- Send the final embed with files ---
     await interaction.followup.send(embed=embed, files=files)
 
-import discord
-import subprocess
-import sys
-import os
-
 @bot.tree.command(name="gitupdate", description="Update the bot from GitHub and restart")
 async def gitupdate(interaction: discord.Interaction):
     allowed_ids = [1121504039146889248, 806806527192334356]
