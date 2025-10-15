@@ -167,7 +167,8 @@ async def daily_calculator():
 @bot.event
 async def on_disconnect():
     with open(GLOBAL_DATA_FILE, "w") as f:
-        json.dump(GLOBAL_DATA_FILE, f)
+        json.dump(debug_global_stats, f, indent=2)
+
 
 @bot.event
 async def on_guild_join(guild: discord.Guild):

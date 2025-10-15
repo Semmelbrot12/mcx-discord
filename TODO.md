@@ -1,5 +1,4 @@
 - [x] Fix ValueError in daily_calculator function by using time(hour=0, minute=0).
 - [x] Fix TypeError in on_message function by adding a try-except block within the loop.
-- [ ] Restart the bot after applying the changes.
-- [ ] Monitor the logs for any new errors.
-- [ ] Test the daily_calculator and on_message functions to ensure they work correctly.
+- [x] Fix data corruption risk in GLOBAL_DATA_FILE by serializing debug_global_stats instead of the filename.
+- [x] Fix unsafe script execution by reading the token from user input instead of executing TOKEN_CHECKER.
