@@ -6,9 +6,11 @@ import subprocess
 import asyncio
 import logging
 import json
-from datetime import time
-from datetime import datetime
+import time
+import datetime
 import aiohttp
+from flask import Flask, jsonify
+import threading
 import mysql.connector
 from io import BytesIO
 from collections import Counter
@@ -25,7 +27,7 @@ except ImportError:
     try:
         subprocess.check_call([
             sys.executable, "-m", "pip", "install",
-            "discord.py", "mysql-connector-python", "aiohttp"
+            "discord.py", "mysql-connector-python", "aiohttp", "flask"
         ])
     except Exception as e:
         print(f"[setup] Auto-install failed: {e}")
@@ -57,6 +59,46 @@ intents.messages = True
 intents.message_content = True
 
 bot = commands.Bot(command_prefix="/", intents=intents)
+
+flask_app = Flask(__name__)
+
+@flask_app.route('/bot_stats')
+def bot_stats():
+    try:
+        uptime = datetime.datetime.utcnow() - bot.start_time
+        uptime_str = str(uptime).split(".")[0]
+        total_guilds = len(bot.guilds)
+        total_members = sum(g.member_count for g in bot.guilds)
+        total_messages = sum(bot.messages_seen.values())
+        size_counts = {"<50": 0, "<250": 0, "<500": 0, "<2500": 0, "2500+": 0}
+        for g in bot.guilds:
+            m = g.member_count
+            if m < 50:
+                size_counts["<50"] += 1
+            elif m < 250:
+                size_counts["<250"] += 1
+            elif m < 500:
+                size_counts["<500"] += 1
+            elif m < 2500:
+                size_counts["<2500"] += 1
+            else:
+                size_counts["2500+"] += 1
+        return jsonify({
+            'uptime': uptime_str,
+            'servers': total_guilds,
+            'total_users': total_members,
+            'total_messages': total_messages,
+            'server_size_breakdown': size_counts
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+def run_flask():
+    flask_app.run(host='0.0.0.0', port=8080, debug=False, use_reloader=False)
+
+# Start Flask in a separate thread
+flask_thread = threading.Thread(target=run_flask, daemon=True)
+flask_thread.start()
 
 GLOBAL_DATA_FILE = "global_data.json"
 DB_CONFIG_FILE = "db_config.json"
@@ -150,13 +192,8 @@ async def update_presence():
 
 @tasks.loop(seconds=10)
 async def daily_calculator():
-    raw_current_time = time.time()
-    current_time = time.gmtime(raw_current_time)
-    required_time = datetime.time(hour=0, minute=0)
-
-
-
-    if required_time.minute == current_time.tm_min and required_time.hour == current_time.tm_hour:
+    current_time = time.gmtime(time.time())
+    if current_time.tm_hour == 0 and current_time.tm_min == 0:
         for cell in debug_global_stats["messages"]:
             try:
                 cell[2].append(cell[1]) # Adds counted messages from on_message event into the list
@@ -894,7 +931,7 @@ from collections import Counter
 # Assuming your bot tracks these
 bot.messages_seen = {}        # {guild_id: message_count}
 bot.server_versions = {}      # {guild_id: "1.21.1", ...}
-bot.start_time = datetime.utcnow()
+bot.start_time = datetime.datetime.utcnow()
 
 
 MESSAGE_COUNT_FILE = "message_counts.json"
@@ -952,7 +989,7 @@ async def stats(interaction: discord.Interaction):
         db_config = json.load(f)
 
     # --- Text stats ---
-    uptime = datetime.utcnow() - bot.start_time
+    uptime = datetime.datetime.utcnow() - bot.start_time
     uptime_str = str(uptime).split(".")[0]
 
     total_guilds = len(bot.guilds)
@@ -1059,7 +1096,8 @@ async def stats(interaction: discord.Interaction):
 ###
 
 # List of allowed user IDs
-ALLOWED_IDS = [1121504039146889248, 806806527192334356]
+#                   slari224           semmelbrot12         n00bi2761(Web)
+ALLOWED_IDS = [1121504039146889248, 806806527192334356, 1088818693103947830]
 
 @bot.tree.command(name="gitupdate", description="Update the bot via SSH and restart")
 async def gitupdate(interaction: discord.Interaction):
@@ -1251,7 +1289,7 @@ async def on_reaction_add(reaction, user):
 @tasks.loop(hours=24)
 async def unlinked_reminder():
     try:
-        today = datetime.utcnow().date()
+        today = datetime.datetime.utcnow().date()
 
         conn = get_db()
         linked_guilds = set()
