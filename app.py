@@ -545,7 +545,6 @@ async def unlink(interaction: discord.Interaction, channel: discord.TextChannel)
             pass
 
 @bot.tree.command(name="playerlist", description="Get the list of online players on the linked Minecraft server")
-@is_admin()
 async def playerlist(interaction: discord.Interaction):
     try:
         await interaction.response.defer(ephemeral=True)
